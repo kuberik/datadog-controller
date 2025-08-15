@@ -1,0 +1,9 @@
+apiVersion: kuberik.com/v1alpha1
+kind: MonitorCheck
+metadata:
+  labels:
+    app.kubernetes.io/name: datadog-controller
+    app.kubernetes.io/managed-by: kustomize
+  name: monitorcheck-sample
+spec:
+  # TODO(user): Add fields here
