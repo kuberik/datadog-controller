@@ -1,0 +1,17 @@
+apiVersion: vendir.k14s.io/v1alpha1
+kind: Config
+directories:
+  - path: vendir/crds
+    contents:
+      - path: datadog
+        git:
+          url: https://github.com/DataDog/datadog-operator
+          ref: v1.8.0
+          subPath: config/crd/bases
+        newRootPath: .
+      - path: kuberik
+        git:
+          url: https://github.com/kuberik/rollout-controller
+          ref: v0.2.1
+          subPath: config/crd/bases
+        newRootPath: .

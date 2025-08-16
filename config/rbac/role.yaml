@@ -5,8 +5,17 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - datadoghq.com
+  resources:
+  - datadogmonitors
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - kuberik.com
   resources:
+  - healthchecks
   - monitorchecks
   verbs:
   - create

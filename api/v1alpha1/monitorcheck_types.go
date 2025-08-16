@@ -20,48 +20,72 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // MonitorCheckSpec defines the desired state of MonitorCheck
 type MonitorCheckSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// LabelSelector specifies which DatadogMonitors to watch
+	// +kubebuilder:validation:Required
+	LabelSelector metav1.LabelSelector `json:"labelSelector"`
 
-	// foo is an example field of MonitorCheck. Edit monitorcheck_types.go to remove/update
+	// HealthCheckTemplate defines the template for creating kuberik HealthCheck resources
+	// +kubebuilder:validation:Required
+	HealthCheckTemplate HealthCheckTemplate `json:"healthCheckTemplate"`
+}
+
+// HealthCheckTemplate defines the template for creating kuberik HealthCheck resources
+// Similar to PodTemplate in Kubernetes deployments
+type HealthCheckTemplate struct {
+	// Labels specifies additional labels for the HealthCheck resource
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations specifies additional annotations for the HealthCheck resource
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// MonitorCheckStatus defines the observed state of MonitorCheck.
+// MonitorCheckStatus defines the observed state of MonitorCheck
 type MonitorCheckStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Conditions represent the latest available observations of a MonitorCheck's current state
+	// +listType=map
+	// +listMapKey=type
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// MatchedMonitorsCount is the total number of DatadogMonitors that match the label selector
+	// +optional
+	MatchedMonitorsCount int32 `json:"matchedMonitorsCount,omitempty"`
+
+	// HealthyMonitorsCount is the number of healthy DatadogMonitors
+	// +optional
+	HealthyMonitorsCount int32 `json:"healthyMonitorsCount,omitempty"`
+
+	// UnhealthyMonitorsCount is the number of unhealthy DatadogMonitors
+	// +optional
+	UnhealthyMonitorsCount int32 `json:"unhealthyMonitorsCount,omitempty"`
+
+	// LastCheckTime is the timestamp of the last health check
+	// +optional
+	LastCheckTime *metav1.Time `json:"lastCheckTime,omitempty"`
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Matched",type="integer",JSONPath=".status.matchedMonitorsCount"
+//+kubebuilder:printcolumn:name="Healthy",type="integer",JSONPath=".status.healthyMonitorsCount"
+//+kubebuilder:printcolumn:name="Unhealthy",type="integer",JSONPath=".status.unhealthyMonitorsCount"
+//+kubebuilder:printcolumn:name="Last Check",type="date",JSONPath=".status.lastCheckTime"
 
 // MonitorCheck is the Schema for the monitorchecks API
 type MonitorCheck struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
-
-	// spec defines the desired state of MonitorCheck
-	// +required
-	Spec MonitorCheckSpec `json:"spec"`
-
-	// status defines the observed state of MonitorCheck
-	// +optional
-	Status MonitorCheckStatus `json:"status,omitempty,omitzero"`
+	Spec   MonitorCheckSpec   `json:"spec,omitempty"`
+	Status MonitorCheckStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // MonitorCheckList contains a list of MonitorCheck
 type MonitorCheckList struct {

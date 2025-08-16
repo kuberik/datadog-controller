@@ -1,0 +1,17 @@
+apiVersion: vendir.k14s.io/v1alpha1
+directories:
+- contents:
+  - git:
+      commitTitle: release v1.8.0
+      sha: 486fe684b270e16a23ddddfdd6cf6e9b94a6738a
+      tags:
+      - v1.8.0
+    path: datadog
+  - git:
+      commitTitle: 'chore: release version v0.2.1'
+      sha: d7a752c0c7635d7e3177a88c75a4cc76f25f6b06
+      tags:
+      - v0.2.1
+    path: kuberik
+  path: vendor/crds
+kind: LockConfig

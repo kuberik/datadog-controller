@@ -1,135 +1,157 @@
-# datadog-controller
-// TODO(user): Add simple overview of use/purpose
+# Datadog Controller
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes controller for managing Datadog monitors and creating corresponding kuberik health checks.
 
-## Getting Started
+## Overview
+
+The Datadog Controller provides a way to monitor the health of DatadogMonitor resources and create corresponding kuberik health checks that can be used in rollouts and other Kubernetes operations.
+
+## Features
+
+- **MonitorCheck**: Automatically monitors DatadogMonitor resources based on label selectors
+- **Health Check Integration**: Creates and manages kuberik health checks based on monitor health status
+- **Label-based Selection**: Flexible label selector matching for DatadogMonitor resources
+- **Configurable Intervals**: Customizable check intervals and timeouts
+- **Status Tracking**: Comprehensive status reporting including healthy/unhealthy monitor counts
+
+## MonitorCheck
+
+The MonitorCheck resource allows you to:
+
+1. **Match DatadogMonitor resources** using label selectors
+2. **Monitor health status** of all matched monitors
+3. **Create kuberik health checks** that reflect the overall health status
+4. **Track statistics** including matched monitors count and health status
+
+### Example Configuration
+
+```yaml
+apiVersion: kuberik.com/v1alpha1
+kind: MonitorCheck
+metadata:
+  name: my-app-monitor-check
+  namespace: default
+spec:
+  # Label selector to match DatadogMonitor resources
+  labelSelector:
+    matchLabels:
+      app: my-app
+      environment: production
+
+  # Name of the kuberik health check to create
+  healthCheckName: my-app-monitor-health
+
+  # Optional: namespace where the health check should be created
+  healthCheckNamespace: default
+
+  # Optional: interval between health check evaluations (default: 30s)
+  checkInterval: "30s"
+
+  # Optional: timeout for health check evaluation (default: 10s)
+  timeout: "10s"
+
+  # Optional: number of retries before marking as unhealthy (default: 3)
+  retryCount: 3
+```
+
+### How It Works
+
+1. **Discovery**: The controller finds all DatadogMonitor resources that match the specified label selector
+2. **Health Evaluation**: It evaluates the health status of each matched monitor
+3. **Health Check Creation**: Creates or updates a kuberik health check based on the overall monitor health
+4. **Status Updates**: Continuously updates the MonitorCheck status with current statistics
+
+### Status Information
+
+The MonitorCheck status provides:
+
+- `matchedMonitorsCount`: Total number of DatadogMonitor resources that match the label selector
+- `healthyMonitorsCount`: Number of healthy monitors
+- `unhealthyMonitorsCount`: Number of unhealthy monitors
+- `lastCheckTime`: Timestamp of the last health check evaluation
+- `healthCheckRef`: Reference to the created kuberik health check
+
+## Installation
 
 ### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- Kubernetes cluster
+- kubectl configured
+- Datadog Operator installed (for DatadogMonitor resources)
 
-```sh
-make docker-build docker-push IMG=<some-registry>/datadog-controller:tag
+### Install the Controller
+
+```bash
+# Install CRDs
+kubectl apply -f config/crd/bases/
+
+# Install the controller
+kubectl apply -k config/default/
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+## Usage
 
-**Install the CRDs into the cluster:**
+### 1. Create a MonitorCheck
 
-```sh
-make install
+```bash
+kubectl apply -f config/samples/v1alpha1_monitorcheck.yaml
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+### 2. Monitor the Status
 
-```sh
-make deploy IMG=<some-registry>/datadog-controller:tag
+```bash
+kubectl get monitorcheck monitorcheck-sample -o yaml
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+### 3. Check the Created Health Check
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+The controller will automatically create a kuberik health check that you can use in your rollouts.
 
-```sh
-kubectl apply -k config/samples/
+## Development
+
+### Building
+
+```bash
+make build
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+### Testing
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
+```bash
+make test
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+### Running Locally
 
-```sh
-make uninstall
+```bash
+make run
 ```
 
-**UnDeploy the controller from the cluster:**
+## Architecture
 
-```sh
-make undeploy
-```
+The controller follows the standard Kubernetes controller pattern:
 
-## Project Distribution
+1. **Reconciliation Loop**: Continuously reconciles MonitorCheck resources
+2. **Label Selector Matching**: Uses Kubernetes label selectors to find relevant DatadogMonitor resources
+3. **Health Status Evaluation**: Determines the health status of matched monitors
+4. **Health Check Management**: Creates and updates kuberik health checks
+5. **Status Updates**: Maintains current status information
 
-Following the options to release and provide this solution to the users.
+## Future Enhancements
 
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/datadog-controller:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/datadog-controller/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v1-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+- **Direct Datadog API Integration**: Real-time monitoring using Datadog API
+- **Advanced Health Logic**: Configurable health evaluation rules
+- **Metrics and Alerting**: Prometheus metrics and alerting integration
+- **Webhook Support**: Configurable webhooks for health status changes
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## License
 
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Apache 2.0
