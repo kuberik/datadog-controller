@@ -16,7 +16,6 @@ rules:
   - kuberik.com
   resources:
   - healthchecks
-  - monitorchecks
   verbs:
   - create
   - delete
@@ -28,13 +27,7 @@ rules:
 - apiGroups:
   - kuberik.com
   resources:
-  - monitorchecks/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - kuberik.com
-  resources:
-  - monitorchecks/status
+  - healthchecks/status
   verbs:
   - get
   - patch

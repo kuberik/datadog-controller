@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/apis/datadoghq/v1alpha1"
-	kuberikcomv1alpha1 "github.com/kuberik/datadog-controller/api/v1alpha1"
+
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
@@ -61,7 +61,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = kuberikcomv1alpha1.AddToScheme(scheme.Scheme)
+
 	Expect(err).NotTo(HaveOccurred())
 	err = datadoghqcomv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
@@ -73,7 +73,6 @@ var _ = BeforeSuite(func() {
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
 			filepath.Join("..", "..", "vendir", "crds", "datadog"),
 			filepath.Join("..", "..", "vendir", "crds", "kuberik"),
 		},

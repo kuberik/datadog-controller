@@ -9,12 +9,12 @@ layout:
 projectName: datadog-controller
 repo: github.com/kuberik/datadog-controller
 resources:
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
+- controller: true
   domain: kuberik.com
-  kind: MonitorCheck
-  path: github.com/kuberik/datadog-controller/api/v1alpha1
+  kind: DatadogMonitor
+  version: v1alpha1
+- controller: true
+  domain: kuberik.com
+  kind: HealthCheck
   version: v1alpha1
 version: "3"

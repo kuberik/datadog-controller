@@ -1,4 +1,4 @@
 ## Append samples of your project ##
 resources:
-- v1alpha1_monitorcheck.yaml
+  - datadogmonitor-sample.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

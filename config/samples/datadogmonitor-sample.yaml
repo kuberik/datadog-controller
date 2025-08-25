@@ -1,0 +1,15 @@
+apiVersion: datadoghq.com/v1alpha1
+kind: DatadogMonitor
+metadata:
+  name: datadogmonitor-sample
+  namespace: default
+  annotations:
+    kuberik.com/health-check: "true"
+spec:
+  name: "Sample Monitor"
+  type: "metric alert"
+  query: "avg(last_5m):avg:system.cpu.user{*} > 80"
+  message: "CPU usage is high"
+  tags:
+    - "env:production"
+    - "service:datadog-controller"
