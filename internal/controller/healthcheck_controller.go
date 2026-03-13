@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,10 +38,27 @@ import (
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
 )
 
+const (
+	managedByLabelKey                     = "kuberik.com/managed-by"
+	managedByDatadogController            = "datadog-controller"
+	datadogMonitorNameAnnotationKey       = "kuberik.com/datadog-monitor-name"
+	datadogGateServiceAnnotationKey       = "kuberik.com/datadog-gate-service"
+	datadogGateEnvAnnotationKey           = "kuberik.com/datadog-gate-env"
+	datadogGateIdentifierAnnotationKey    = "kuberik.com/datadog-gate-identifier"
+	datadogGateVersionAnnotationKey       = "kuberik.com/datadog-gate-version"
+	datadogGateAPMPrimaryTagAnnotationKey = "kuberik.com/datadog-gate-apm-primary-tag"
+	datadogGateEvaluationIDAnnotationKey  = "kuberik.com/datadog-gate-evaluation-id"
+	datadogGateInputHashAnnotationKey     = "kuberik.com/datadog-gate-input-hash"
+	defaultDatadogGateIdentifier          = "default"
+	healthCheckRequeueInterval            = 30 * time.Second
+	deploymentGatePollInterval            = 15 * time.Second
+)
+
 // HealthCheckReconciler reconciles a HealthCheck object
 type HealthCheckReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	GateClient deploymentGateClient
 }
 
 // +kubebuilder:rbac:groups=kuberik.com,resources=healthchecks,verbs=get;list;watch;update;patch
@@ -84,17 +104,20 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			log.Error(err, "Failed to update HealthCheck status")
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
 	}
 
-	// Update HealthCheck status based on DatadogMonitor status
+	if gateInput, ok := r.resolveDeploymentGateInput(datadogMonitor); ok {
+		return r.reconcileDeploymentGate(ctx, healthCheck, gateInput)
+	}
+
+	// Fall back to DatadogMonitor status when deployment gate inputs are not configured.
 	if err := r.updateHealthCheckStatusFromMonitor(ctx, healthCheck, datadogMonitor); err != nil {
 		log.Error(err, "Failed to update HealthCheck status from monitor")
 		return ctrl.Result{}, err
 	}
 
-	// Requeue every 30 seconds to keep status updated
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
 }
 
 // isManagedByDatadogController checks if the HealthCheck is managed by our controller
@@ -103,8 +126,8 @@ func (r *HealthCheckReconciler) isManagedByDatadogController(healthCheck *kuberi
 		return false
 	}
 
-	value, exists := healthCheck.Labels["kuberik.com/managed-by"]
-	return exists && value == "datadog-controller"
+	value, exists := healthCheck.Labels[managedByLabelKey]
+	return exists && value == managedByDatadogController
 }
 
 // findOwnerDatadogMonitor finds the DatadogMonitor that owns this HealthCheck
@@ -130,7 +153,7 @@ func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, hea
 
 	// Fallback: try to find by annotation
 	if healthCheck.Annotations != nil {
-		if monitorName, exists := healthCheck.Annotations["kuberik.com/datadog-monitor-name"]; exists {
+		if monitorName, exists := healthCheck.Annotations[datadogMonitorNameAnnotationKey]; exists {
 			datadogMonitor := &datadoghqcomv1alpha1.DatadogMonitor{}
 			err := r.Get(ctx, types.NamespacedName{
 				Namespace: healthCheck.Namespace,
@@ -203,6 +226,129 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime)
 }
 
+func (r *HealthCheckReconciler) resolveDeploymentGateInput(monitor *datadoghqcomv1alpha1.DatadogMonitor) (deploymentGateInput, bool) {
+	if monitor == nil {
+		return deploymentGateInput{}, false
+	}
+
+	service := firstNonEmpty(
+		annotationValue(monitor.Annotations, datadogGateServiceAnnotationKey),
+		tagValue(monitor.Spec.Tags, "service"),
+	)
+	env := firstNonEmpty(
+		annotationValue(monitor.Annotations, datadogGateEnvAnnotationKey),
+		tagValue(monitor.Spec.Tags, "env"),
+	)
+
+	if service == "" || env == "" {
+		return deploymentGateInput{}, false
+	}
+
+	return deploymentGateInput{
+		Service:       service,
+		Env:           env,
+		Identifier:    firstNonEmpty(annotationValue(monitor.Annotations, datadogGateIdentifierAnnotationKey), defaultDatadogGateIdentifier),
+		Version:       annotationValue(monitor.Annotations, datadogGateVersionAnnotationKey),
+		APMPrimaryTag: annotationValue(monitor.Annotations, datadogGateAPMPrimaryTagAnnotationKey),
+	}, true
+}
+
+func (r *HealthCheckReconciler) reconcileDeploymentGate(
+	ctx context.Context,
+	healthCheck *kuberikrolloutv1alpha1.HealthCheck,
+	input deploymentGateInput,
+) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	gateClient, err := r.getDeploymentGateClient()
+	if err != nil {
+		logger.Info("Datadog deployment gates client is not configured, marking HealthCheck as Pending", "error", err)
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
+	}
+
+	inputHash := hashDeploymentGateInput(input)
+	currentHash := annotationValue(healthCheck.Annotations, datadogGateInputHashAnnotationKey)
+	evaluationID := annotationValue(healthCheck.Annotations, datadogGateEvaluationIDAnnotationKey)
+
+	if evaluationID == "" || currentHash != inputHash {
+		evaluationID, err = gateClient.StartEvaluation(ctx, input)
+		if err != nil {
+			logger.Error(err, "Failed to start Datadog deployment gate evaluation", "service", input.Service, "env", input.Env, "identifier", input.Identifier)
+			if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
+		}
+
+		logger.Info("Started Datadog deployment gate evaluation",
+			"healthCheck", healthCheck.Name,
+			"service", input.Service,
+			"env", input.Env,
+			"identifier", input.Identifier,
+			"evaluationID", evaluationID)
+
+		if err := r.patchHealthCheckAnnotations(ctx, healthCheck, map[string]string{
+			datadogGateEvaluationIDAnnotationKey: evaluationID,
+			datadogGateInputHashAnnotationKey:    inputHash,
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		refreshedHealthCheck := &kuberikrolloutv1alpha1.HealthCheck{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(healthCheck), refreshedHealthCheck); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		if err := r.updateHealthCheckStatus(ctx, refreshedHealthCheck, kuberikrolloutv1alpha1.HealthStatusPending, refreshedHealthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{RequeueAfter: deploymentGatePollInterval}, nil
+	}
+
+	evaluation, err := gateClient.GetEvaluation(ctx, evaluationID)
+	if err != nil {
+		logger.Error(err, "Failed to fetch Datadog deployment gate evaluation", "evaluationID", evaluationID, "healthCheck", healthCheck.Name)
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
+	}
+
+	logger.Info("Fetched Datadog deployment gate evaluation",
+		"healthCheck", healthCheck.Name,
+		"evaluationID", evaluationID,
+		"gateStatus", evaluation.Status,
+		"ruleCount", len(evaluation.Rules))
+
+	switch evaluation.Status {
+	case "pass":
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusHealthy, healthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	case "fail":
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusUnhealthy, lastErrorTimeForUnhealthy(healthCheck)); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	case "in_progress":
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: deploymentGatePollInterval}, nil
+	default:
+		logger.Info("Unknown Datadog deployment gate status, marking HealthCheck as Pending", "evaluationID", evaluationID, "gateStatus", evaluation.Status)
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
+	}
+}
+
 // updateHealthCheckStatus updates the HealthCheck status
 func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time) error {
 	// Only update if status has changed
@@ -217,6 +363,79 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 	healthCheck.Status.LastErrorTime = lastErrorTime
 
 	return r.Status().Update(ctx, healthCheck)
+}
+
+func (r *HealthCheckReconciler) patchHealthCheckAnnotations(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, annotations map[string]string) error {
+	original := healthCheck.DeepCopy()
+	if healthCheck.Annotations == nil {
+		healthCheck.Annotations = make(map[string]string, len(annotations))
+	}
+
+	changed := false
+	for key, value := range annotations {
+		if healthCheck.Annotations[key] != value {
+			healthCheck.Annotations[key] = value
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return r.Patch(ctx, healthCheck, client.MergeFrom(original))
+}
+
+func (r *HealthCheckReconciler) getDeploymentGateClient() (deploymentGateClient, error) {
+	if r.GateClient != nil {
+		return r.GateClient, nil
+	}
+
+	return newDatadogDeploymentGatesClientFromEnv()
+}
+
+func lastErrorTimeForUnhealthy(healthCheck *kuberikrolloutv1alpha1.HealthCheck) *metav1.Time {
+	if healthCheck.Status.Status == kuberikrolloutv1alpha1.HealthStatusUnhealthy && healthCheck.Status.LastErrorTime != nil {
+		return healthCheck.Status.LastErrorTime
+	}
+
+	now := metav1.Now()
+	return &now
+}
+
+func hashDeploymentGateInput(input deploymentGateInput) string {
+	hash := sha256.Sum256([]byte(strings.Join([]string{
+		input.Service,
+		input.Env,
+		input.Identifier,
+		input.Version,
+		input.APMPrimaryTag,
+	}, "\x00")))
+
+	return hex.EncodeToString(hash[:])
+}
+
+func annotationValue(annotations map[string]string, key string) string {
+	if annotations == nil {
+		return ""
+	}
+
+	return strings.TrimSpace(annotations[key])
+}
+
+func tagValue(tags []string, key string) string {
+	for _, tag := range tags {
+		tagKey, tagValue, ok := strings.Cut(tag, ":")
+		if !ok {
+			continue
+		}
+
+		if strings.EqualFold(strings.TrimSpace(tagKey), key) {
+			return strings.TrimSpace(tagValue)
+		}
+	}
+
+	return ""
 }
 
 // enqueueHealthChecksForMonitor enqueues HealthCheck objects that are owned by a given DatadogMonitor

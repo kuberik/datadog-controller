@@ -5,6 +5,9 @@ metadata:
   namespace: default
   annotations:
     kuberik.com/health-check: "true"
+    # kuberik.com/datadog-gate-identifier: "canary"
+    # kuberik.com/datadog-gate-version: "1.2.3"
+    # kuberik.com/datadog-gate-apm-primary-tag: "team:platform"
 spec:
   name: "Sample Monitor"
   type: "metric alert"
