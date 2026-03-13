@@ -3,6 +3,7 @@ module github.com/kuberik/datadog-controller
 go 1.24.2
 
 require (
+	github.com/DataDog/datadog-api-client-go/v2 v2.56.0
 	github.com/DataDog/datadog-operator v1.8.0
 	github.com/kuberik/rollout-controller v0.2.1
 	github.com/onsi/ginkgo/v2 v2.22.0
@@ -15,7 +16,6 @@ require (
 
 require (
 	cel.dev/expr v0.19.1 // indirect
-	github.com/DataDog/datadog-api-client-go/v2 v2.19.0 // indirect
 	github.com/DataDog/extendeddaemonset v0.10.0-rc.4 // indirect
 	github.com/DataDog/zstd v1.5.2 // indirect
 	github.com/Masterminds/semver/v3 v3.1.1 // indirect

@@ -1,7 +1,7 @@
 cel.dev/expr v0.19.1 h1:NciYrtDRIR0lNCnH1LFJegdjspNx9fI59O7TWcua/W4=
 cel.dev/expr v0.19.1/go.mod h1:MrpN08Q+lEBs+bGYdLxxHkZoUSsCp0nSKTs0nTymJgw=
-github.com/DataDog/datadog-api-client-go/v2 v2.19.0 h1:Wvz/63/q39EpVwSH1T8jVyRvPcMfEABenU7sD3dO2Lc=
-github.com/DataDog/datadog-api-client-go/v2 v2.19.0/go.mod h1:oD5Lx8Li3oPRa/BSBenkn4i48z+91gwYORF/+6ph71g=
+github.com/DataDog/datadog-api-client-go/v2 v2.56.0 h1:HKcfvAODmJCUw7nfbDKKqkEUgcu7CfxUPA9EFRJrHEI=
+github.com/DataDog/datadog-api-client-go/v2 v2.56.0/go.mod h1:d3tOEgUd2kfsr9uuHQdY+nXrWp4uikgTgVCPdKNK30U=
 github.com/DataDog/datadog-operator v1.8.0 h1:5gzza6p+kwxkO0kYfKpN6c8l96xlP6bk7K5pxDEPRZg=
 github.com/DataDog/datadog-operator v1.8.0/go.mod h1:IaTKfjDrsmc7pcBCaKnlhS/I68GuiFIpAoM0+fh3QfQ=
 github.com/DataDog/extendeddaemonset v0.10.0-rc.4 h1:m88E+emuRHIqKgi7kHMd9N0S/NtruCCOISp3cjB7DNs=

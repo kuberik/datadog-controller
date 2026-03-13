@@ -4,7 +4,7 @@ A Kubernetes controller that automatically creates and manages kuberik HealthChe
 
 ## Overview
 
-This controller watches for DatadogMonitor resources and automatically creates corresponding kuberik HealthCheck resources when a specific annotation is present. The HealthCheck status is then continuously updated based on the DatadogMonitor's health state.
+This controller watches for DatadogMonitor resources and automatically creates corresponding kuberik HealthCheck resources when a specific annotation is present. When a monitor provides Datadog deployment-gate inputs, the HealthCheck status is driven by the Datadog Deployment Gates API; otherwise it falls back to the DatadogMonitor status.
 
 ## How It Works
 
@@ -28,11 +28,17 @@ When the annotation is present:
 
 ### 3. Status Synchronization
 
-The controller continuously monitors the DatadogMonitor status and updates the HealthCheck accordingly:
+When the monitor has both `service:` and `env:` tags (or equivalent override annotations), the controller evaluates a Datadog deployment gate and maps the gate result to the HealthCheck:
 
-- **OK** → `Healthy`
-- **Alert** → `Unhealthy` (with error timestamp)
-- **Warn/NoData/Skipped/Ignored** → `Pending`
+- **pass** -> `Healthy`
+- **fail** -> `Unhealthy` (with error timestamp)
+- **in_progress** -> `Pending`
+
+If deployment-gate inputs are not configured, the controller falls back to the DatadogMonitor status:
+
+- **OK** -> `Healthy`
+- **Alert** -> `Unhealthy` (with error timestamp)
+- **Warn/NoData/Skipped/Ignored** -> `Pending`
 
 ### 4. Cleanup
 
@@ -50,11 +56,18 @@ metadata:
   namespace: production
   annotations:
     kuberik.com/health-check: "true"
+    # Optional deployment-gate overrides:
+    # kuberik.com/datadog-gate-identifier: "canary"
+    # kuberik.com/datadog-gate-version: "1.2.3"
+    # kuberik.com/datadog-gate-apm-primary-tag: "team:platform"
 spec:
   name: "High CPU Alert"
   type: "metric alert"
   query: "avg(last_5m):avg:system.cpu.user{*} > 80"
   message: "CPU usage is high"
+  tags:
+    - "env:production"
+    - "service:payments"
 ```
 
 This will automatically create a HealthCheck named `datadog-check-my-monitor` in the `production` namespace.
@@ -82,6 +95,18 @@ The system consists of two main controllers:
 
 The controller uses the following annotation key:
 - `kuberik.com/health-check`: Set to `"true"` to enable HealthCheck creation
+
+Optional deployment-gate annotations on the DatadogMonitor:
+- `kuberik.com/datadog-gate-service`: Override the Datadog service instead of reading the `service:` tag
+- `kuberik.com/datadog-gate-env`: Override the Datadog environment instead of reading the `env:` tag
+- `kuberik.com/datadog-gate-identifier`: Override the gate identifier (defaults to `default`)
+- `kuberik.com/datadog-gate-version`: Version forwarded to the Datadog gate evaluation request
+- `kuberik.com/datadog-gate-apm-primary-tag`: APM primary tag forwarded to the Datadog gate evaluation request
+
+To enable deployment-gate evaluations, set Datadog credentials in the controller environment:
+- `DATADOG_API_KEY` or `DD_API_KEY`
+- `DATADOG_APP_KEY` or `DD_APP_KEY`
+- `DATADOG_SITE` or `DD_SITE` (optional, defaults to `datadoghq.com`)
 
 ## Monitoring
 
