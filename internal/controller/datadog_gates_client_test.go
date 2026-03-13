@@ -125,19 +125,18 @@ func TestDatadogDeploymentGatesClientGetEvaluation(t *testing.T) {
 	}
 }
 
-func TestResolveDatadogAPIBaseURL(t *testing.T) {
+func TestNormalizeDatadogSite(t *testing.T) {
 	t.Helper()
 
 	testCases := map[string]string{
-		"":                          "https://api.datadoghq.com",
-		"datadoghq.eu":              "https://api.datadoghq.eu",
-		"api.us3.datadoghq.com":     "https://api.us3.datadoghq.com",
-		"https://custom.example.io": "https://custom.example.io",
+		"":                      "datadoghq.com",
+		"datadoghq.eu":          "datadoghq.eu",
+		"api.us3.datadoghq.com": "us3.datadoghq.com",
 	}
 
 	for input, expected := range testCases {
-		if got := resolveDatadogAPIBaseURL(input); got != expected {
-			t.Fatalf("resolveDatadogAPIBaseURL(%q) = %q, want %q", input, got, expected)
+		if got := normalizeDatadogSite(input); got != expected {
+			t.Fatalf("normalizeDatadogSite(%q) = %q, want %q", input, got, expected)
 		}
 	}
 }

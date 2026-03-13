@@ -1,17 +1,16 @@
 package controller
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 )
 
 const (
@@ -55,10 +54,9 @@ type deploymentGateRuleEvaluation struct {
 }
 
 type datadogDeploymentGatesClient struct {
-	baseURL    string
-	apiKey     string
-	appKey     string
-	httpClient *http.Client
+	apiClient       *datadog.APIClient
+	apiKeys         map[string]datadog.APIKey
+	serverVariables map[string]string
 }
 
 func newDatadogDeploymentGatesClientFromEnv() (deploymentGateClient, error) {
@@ -73,7 +71,7 @@ func newDatadogDeploymentGatesClientFromEnv() (deploymentGateClient, error) {
 	}
 
 	site := firstNonEmpty(os.Getenv(datadogSiteEnvVar), os.Getenv(datadogAltSiteEnvVar), defaultDatadogSite)
-	return newDatadogDeploymentGatesClient(resolveDatadogAPIBaseURL(site), apiKey, appKey, nil), nil
+	return newDatadogDeploymentGatesClient(site, apiKey, appKey, nil), nil
 }
 
 func newDatadogDeploymentGatesClient(baseURL string, apiKey string, appKey string, httpClient *http.Client) deploymentGateClient {
@@ -81,12 +79,33 @@ func newDatadogDeploymentGatesClient(baseURL string, apiKey string, appKey strin
 		httpClient = &http.Client{Timeout: defaultDatadogHTTPTimout}
 	}
 
-	return &datadogDeploymentGatesClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		apiKey:     apiKey,
-		appKey:     appKey,
-		httpClient: httpClient,
+	cfg := datadog.NewConfiguration()
+	cfg.HTTPClient = httpClient
+
+	client := &datadogDeploymentGatesClient{
+		apiClient: datadog.NewAPIClient(cfg),
+		apiKeys: map[string]datadog.APIKey{
+			"apiKeyAuth": {Key: apiKey},
+			"appKeyAuth": {Key: appKey},
+		},
 	}
+
+	trimmed := strings.TrimSpace(baseURL)
+	if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
+		cfg.Servers = datadog.ServerConfigurations{
+			{
+				URL:         strings.TrimRight(trimmed, "/"),
+				Description: "custom Datadog deployment gates server",
+			},
+		}
+		return client
+	}
+
+	client.serverVariables = map[string]string{
+		"site": normalizeDatadogSite(trimmed),
+	}
+
+	return client
 }
 
 func (c *datadogDeploymentGatesClient) StartEvaluation(ctx context.Context, input deploymentGateInput) (string, error) {
@@ -109,21 +128,6 @@ func (c *datadogDeploymentGatesClient) StartEvaluation(ctx context.Context, inpu
 		attributes["apm_primary_tag"] = input.APMPrimaryTag
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal deployment gate evaluation request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/unstable/deployments/gates/evaluation", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("create deployment gate evaluation request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("DD-API-KEY", c.apiKey)
-	req.Header.Set("DD-APPLICATION-KEY", c.appKey)
-
 	var response struct {
 		Data struct {
 			Attributes struct {
@@ -132,7 +136,7 @@ func (c *datadogDeploymentGatesClient) StartEvaluation(ctx context.Context, inpu
 		} `json:"data"`
 	}
 
-	if err := c.do(req, &response); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/unstable/deployments/gates/evaluation", payload, &response); err != nil {
 		return "", err
 	}
 
@@ -144,20 +148,6 @@ func (c *datadogDeploymentGatesClient) StartEvaluation(ctx context.Context, inpu
 }
 
 func (c *datadogDeploymentGatesClient) GetEvaluation(ctx context.Context, evaluationID string) (deploymentGateEvaluation, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		c.baseURL+"/api/unstable/deployments/gates/evaluation/"+url.PathEscape(evaluationID),
-		nil,
-	)
-	if err != nil {
-		return deploymentGateEvaluation{}, fmt.Errorf("create deployment gate status request: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("DD-API-KEY", c.apiKey)
-	req.Header.Set("DD-APPLICATION-KEY", c.appKey)
-
 	var response struct {
 		Data struct {
 			ID         string `json:"id"`
@@ -169,7 +159,7 @@ func (c *datadogDeploymentGatesClient) GetEvaluation(ctx context.Context, evalua
 		} `json:"data"`
 	}
 
-	if err := c.do(req, &response); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/unstable/deployments/gates/evaluation/"+url.PathEscape(evaluationID), nil, &response); err != nil {
 		return deploymentGateEvaluation{}, err
 	}
 
@@ -181,40 +171,85 @@ func (c *datadogDeploymentGatesClient) GetEvaluation(ctx context.Context, evalua
 	}, nil
 }
 
-func (c *datadogDeploymentGatesClient) do(req *http.Request, out any) error {
-	resp, err := c.httpClient.Do(req)
+func (c *datadogDeploymentGatesClient) do(ctx context.Context, method string, path string, body any, out any) error {
+	requestContext := c.requestContext(ctx)
+	baseURL, err := c.apiClient.Cfg.ServerURLWithContext(requestContext, "deploymentGatesEvaluation")
+	if err != nil {
+		return fmt.Errorf("resolve datadog deployment gates server URL: %w", err)
+	}
+
+	headerParams := map[string]string{
+		"Accept": "application/json",
+	}
+	if body != nil {
+		headerParams["Content-Type"] = "application/json"
+	}
+
+	datadog.SetAuthKeys(
+		requestContext,
+		&headerParams,
+		[2]string{"apiKeyAuth", "DD-API-KEY"},
+		[2]string{"appKeyAuth", "DD-APPLICATION-KEY"},
+	)
+
+	req, err := c.apiClient.PrepareRequest(
+		requestContext,
+		baseURL+path,
+		method,
+		body,
+		headerParams,
+		url.Values{},
+		url.Values{},
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare datadog deployment gates request: %w", err)
+	}
+
+	resp, err := c.apiClient.CallAPI(req)
 	if err != nil {
 		return fmt.Errorf("call datadog deployment gates API: %w", err)
 	}
-	defer resp.Body.Close()
+	if resp == nil {
+		return errors.New("datadog deployment gates API returned a nil response")
+	}
 
-	body, err := io.ReadAll(resp.Body)
+	responseBody, err := datadog.ReadBody(resp)
 	if err != nil {
 		return fmt.Errorf("read datadog deployment gates API response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("datadog deployment gates API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("datadog deployment gates API returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 	}
 
-	if err := json.Unmarshal(body, out); err != nil {
+	if err := c.apiClient.Decode(out, responseBody, resp.Header.Get("Content-Type")); err != nil {
 		return fmt.Errorf("decode datadog deployment gates API response: %w", err)
 	}
 
 	return nil
 }
 
-func resolveDatadogAPIBaseURL(site string) string {
+func (c *datadogDeploymentGatesClient) requestContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ctx = context.WithValue(ctx, datadog.ContextAPIKeys, c.apiKeys)
+	if len(c.serverVariables) > 0 {
+		ctx = context.WithValue(ctx, datadog.ContextServerVariables, c.serverVariables)
+	}
+
+	return ctx
+}
+
+func normalizeDatadogSite(site string) string {
 	trimmed := strings.TrimSpace(site)
 	if trimmed == "" {
-		trimmed = defaultDatadogSite
+		return defaultDatadogSite
 	}
 
-	if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
-		return strings.TrimRight(trimmed, "/")
-	}
-
-	return "https://api." + strings.TrimPrefix(trimmed, "api.")
+	return strings.TrimPrefix(trimmed, "api.")
 }
 
 func firstNonEmpty(values ...string) string {
