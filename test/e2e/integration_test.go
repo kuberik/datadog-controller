@@ -93,9 +93,7 @@ metadata:
 spec:
   name: "Integration Test Monitor"
   type: "metric alert"
-  query: "avg(last_5m):avg:system.cpu.user{*} > 80"
-status:
-  monitorState: "OK"`, monitorName, resourceNamespace)
+  query: "avg(last_5m):avg:system.cpu.user{*} > 80"`, monitorName, resourceNamespace)
 
 			// Write YAML to temporary file
 			tmpFile, err := os.CreateTemp("", "monitor-*.yaml")
@@ -107,6 +105,22 @@ status:
 
 			// Apply the monitor
 			cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--subresource=status",
+				"--type",
+				"merge",
+				"-p",
+				`{"status":{"monitorState":"OK"}}`,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -208,6 +222,7 @@ status:
 				monitorName,
 				"-n",
 				resourceNamespace,
+				"--subresource=status",
 				"--type",
 				"merge",
 				"-p",
@@ -258,6 +273,7 @@ status:
 				monitorName,
 				"-n",
 				resourceNamespace,
+				"--subresource=status",
 				"--type",
 				"merge",
 				"-p",
@@ -298,7 +314,7 @@ status:
 			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(BeEmpty())
+			Expect(output).NotTo(BeEmpty(), "lastErrorTime is kept after recovery")
 		})
 
 		It("Should handle lifecycle: create, update, delete", func() {
@@ -353,7 +369,7 @@ spec:
 				"--type",
 				"merge",
 				"-p",
-				`{"metadata":{"annotations":{}}}`,
+				`{"metadata":{"annotations":{"kuberik.com/health-check":null}}}`,
 			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
