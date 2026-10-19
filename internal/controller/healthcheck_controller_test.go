@@ -18,17 +18,19 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1 "k8s.io/api/core/v1"
 
-	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/apis/datadoghq/v1alpha1"
+	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/api/datadoghq/v1alpha1"
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
 )
 
@@ -491,6 +493,97 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(updatedHealthCheck.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusUnhealthy))
 			Expect(updatedHealthCheck.Status.LastErrorTime).NotTo(BeNil())
+		})
+
+		It("should evaluate a standalone datadog class HealthCheck and re-evaluate after a rollout reset", func() {
+			ctx := context.Background()
+			class := datadogHealthCheckClass
+			standalone := &kuberikrolloutv1alpha1.HealthCheck{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "standalone-healthcheck",
+					Namespace: namespace,
+					Labels:    map[string]string{"app": "test-app"},
+					Annotations: map[string]string{
+						datadogGateServiceAnnotationKey: "payments",
+						datadogGateEnvAnnotationKey:     "prod",
+						datadogGateVersionAnnotationKey: "1.2.3",
+					},
+				},
+				Spec: kuberikrolloutv1alpha1.HealthCheckSpec{Class: &class},
+			}
+			Expect(k8sClient.Create(ctx, standalone)).To(Succeed())
+			key := client.ObjectKeyFromObject(standalone)
+
+			evaluations := 0
+			gateClient := &fakeDeploymentGateClient{
+				startFunc: func(_ context.Context, _ deploymentGateInput) (string, error) {
+					evaluations++
+					return fmt.Sprintf("eval-%d", evaluations), nil
+				},
+				getFunc: func(_ context.Context, evaluationID string) (deploymentGateEvaluation, error) {
+					return deploymentGateEvaluation{ID: evaluationID, Status: "pass"}, nil
+				},
+			}
+			controllerReconciler := &HealthCheckReconciler{
+				Client:     k8sClient,
+				Scheme:     k8sClient.Scheme(),
+				GateClient: gateClient,
+			}
+
+			By("starting and polling the first evaluation")
+			for range 2 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(gateClient.startedInputs).To(Equal([]deploymentGateInput{{
+				Service:    "payments",
+				Env:        "prod",
+				Identifier: defaultDatadogGateIdentifier,
+				Version:    "1.2.3",
+			}}))
+			updated := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
+
+			By("simulating the rollout controller resetting the HealthCheck for a new deployment")
+			resetAt := metav1.NewTime(time.Now().Add(time.Second))
+			updated.Status.Status = kuberikrolloutv1alpha1.HealthStatusPending
+			updated.Status.LastChangeTime = &resetAt
+			Expect(k8sClient.Status().Update(ctx, updated)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gateClient.startedInputs).To(HaveLen(2))
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[datadogGateEvaluationIDAnnotationKey]).To(Equal("eval-2"))
+		})
+
+		It("should keep a datadog class HealthCheck without service or env Pending", func() {
+			ctx := context.Background()
+			class := datadogHealthCheckClass
+			incomplete := &kuberikrolloutv1alpha1.HealthCheck{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "incomplete-healthcheck",
+					Namespace:   namespace,
+					Annotations: map[string]string{datadogGateServiceAnnotationKey: "payments"},
+				},
+				Spec: kuberikrolloutv1alpha1.HealthCheckSpec{Class: &class},
+			}
+			Expect(k8sClient.Create(ctx, incomplete)).To(Succeed())
+
+			gateClient := &fakeDeploymentGateClient{}
+			controllerReconciler := &HealthCheckReconciler{
+				Client:     k8sClient,
+				Scheme:     k8sClient.Scheme(),
+				GateClient: gateClient,
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(incomplete)})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(gateClient.startedInputs).To(BeEmpty())
+
+			updated := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(incomplete), updated)).To(Succeed())
+			Expect(updated.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusPending))
 		})
 
 		It("should skip HealthChecks not managed by datadog-controller", func() {

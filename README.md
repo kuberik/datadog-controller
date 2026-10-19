@@ -108,6 +108,38 @@ To enable deployment-gate evaluations, set Datadog credentials in the controller
 - `DATADOG_APP_KEY` or `DD_APP_KEY`
 - `DATADOG_SITE` or `DD_SITE` (optional, defaults to `datadoghq.com`)
 
+The install manifests read these from an optional `datadog-credentials` Secret in the controller namespace (keys `api-key`, `app-key`, `site`). One Secret serves every HealthCheck in the cluster:
+
+```bash
+kubectl -n kuberik-system create secret generic datadog-credentials \
+  --from-literal=api-key=... --from-literal=app-key=...
+```
+
+## Standalone Datadog HealthChecks
+
+A HealthCheck with `spec.class: datadog` is evaluated against a Datadog deployment gate directly, with no DatadogMonitor. It takes the same `kuberik.com/datadog-gate-*` annotations, and `service` and `env` are required:
+
+```yaml
+apiVersion: kuberik.com/v1alpha1
+kind: HealthCheck
+metadata:
+  name: payments-datadog
+  labels:
+    app: payments
+  annotations:
+    kuberik.com/datadog-gate-service: payments
+    kuberik.com/datadog-gate-env: prod
+    kuberik.com/datadog-gate-version: "${SERVICE_VERSION}"
+spec:
+  class: datadog
+```
+
+The gate is evaluated again whenever:
+- the inputs change, for example a new `datadog-gate-version`, or
+- the rollout controller resets the HealthCheck for a new deployment or a retry.
+
+Each deployment therefore gets a fresh gate verdict.
+
 ## Monitoring
 
 The controller logs all operations including:

@@ -8,10 +8,9 @@ directories:
       - v1.8.0
     path: datadog
   - git:
-      commitTitle: 'chore: release version v0.2.1'
-      sha: d7a752c0c7635d7e3177a88c75a4cc76f25f6b06
+      sha: 9a55438c1a01c5621f9daaa2bf021c44cf4034ca
       tags:
-      - v0.2.1
+      - v0.9.2
     path: kuberik
   path: vendor/crds
 kind: LockConfig
