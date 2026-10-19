@@ -51,6 +51,7 @@ const (
 	datadogGateInputHashAnnotationKey     = "kuberik.com/datadog-gate-input-hash"
 	datadogGateStartedAtAnnotationKey     = "kuberik.com/datadog-gate-evaluation-started-at"
 	datadogHealthCheckClass               = "datadog"
+	datadogMonitorKind                    = "DatadogMonitor"
 	defaultDatadogGateIdentifier          = "default"
 	healthCheckRequeueInterval            = 30 * time.Second
 	deploymentGatePollInterval            = 15 * time.Second
@@ -70,7 +71,7 @@ type HealthCheckReconciler struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Fetch the HealthCheck instance
 	healthCheck := &kuberikrolloutv1alpha1.HealthCheck{}
@@ -79,18 +80,18 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Return and don't requeue
-			log.Info("HealthCheck resource not found. Ignoring since object must be deleted")
+			logger.Info("HealthCheck resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
-		log.Error(err, "Failed to get HealthCheck")
+		logger.Error(err, "Failed to get HealthCheck")
 		return ctrl.Result{}, err
 	}
 
 	if isDatadogClassHealthCheck(healthCheck) {
 		gateInput, ok := resolveDeploymentGateInput(healthCheck.Annotations, nil)
 		if !ok {
-			log.Info("HealthCheck of class datadog is missing service or env annotations, marking as Pending")
+			logger.Info("HealthCheck of class datadog is missing service or env annotations, marking as Pending")
 			if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, healthCheck.Status.LastErrorTime); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -101,21 +102,21 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Check if this HealthCheck is managed by our controller
 	if !r.isManagedByDatadogController(healthCheck) {
-		log.Info("HealthCheck is not managed by datadog-controller, skipping")
+		logger.Info("HealthCheck is not managed by datadog-controller, skipping")
 		return ctrl.Result{}, nil
 	}
 
 	// Find the owner DatadogMonitor
 	datadogMonitor, err := r.findOwnerDatadogMonitor(ctx, healthCheck)
 	if err != nil {
-		log.Error(err, "Failed to find owner DatadogMonitor")
+		logger.Error(err, "Failed to find owner DatadogMonitor")
 		return ctrl.Result{}, err
 	}
 
 	if datadogMonitor == nil {
 		// No owner found, set status to Pending
 		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, nil); err != nil {
-			log.Error(err, "Failed to update HealthCheck status")
+			logger.Error(err, "Failed to update HealthCheck status")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: healthCheckRequeueInterval}, nil
@@ -127,7 +128,7 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Fall back to DatadogMonitor status when deployment gate inputs are not configured.
 	if err := r.updateHealthCheckStatusFromMonitor(ctx, healthCheck, datadogMonitor); err != nil {
-		log.Error(err, "Failed to update HealthCheck status from monitor")
+		logger.Error(err, "Failed to update HealthCheck status from monitor")
 		return ctrl.Result{}, err
 	}
 
@@ -148,7 +149,7 @@ func (r *HealthCheckReconciler) isManagedByDatadogController(healthCheck *kuberi
 func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck) (*datadoghqcomv1alpha1.DatadogMonitor, error) {
 	// First try to find by owner reference
 	for _, ownerRef := range healthCheck.OwnerReferences {
-		if ownerRef.Kind == "DatadogMonitor" && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
+		if ownerRef.Kind == datadogMonitorKind && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
 			datadogMonitor := &datadoghqcomv1alpha1.DatadogMonitor{}
 			err := r.Get(ctx, types.NamespacedName{
 				Namespace: healthCheck.Namespace,
@@ -189,7 +190,7 @@ func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, hea
 
 // updateHealthCheckStatusFromMonitor updates the HealthCheck status based on DatadogMonitor status
 func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, monitor *datadoghqcomv1alpha1.DatadogMonitor) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	var healthStatus kuberikrolloutv1alpha1.HealthStatus
 	var lastErrorTime *metav1.Time
@@ -231,7 +232,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 		lastErrorTime = healthCheck.Status.LastErrorTime
 	}
 
-	log.Info("Updating HealthCheck status from monitor",
+	logger.Info("Updating HealthCheck status from monitor",
 		"healthCheck", healthCheck.Name,
 		"monitor", monitor.Name,
 		"monitorState", monitor.Status.MonitorState,
@@ -491,7 +492,7 @@ func (r *HealthCheckReconciler) enqueueHealthChecksForMonitor(ctx context.Contex
 	for _, healthCheck := range healthChecks.Items {
 		// Check if this HealthCheck is owned by our DatadogMonitor
 		for _, ownerRef := range healthCheck.OwnerReferences {
-			if ownerRef.UID == datadogMonitor.UID && ownerRef.Kind == "DatadogMonitor" && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
+			if ownerRef.UID == datadogMonitor.UID && ownerRef.Kind == datadogMonitorKind && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{
 						Name:      healthCheck.Name,

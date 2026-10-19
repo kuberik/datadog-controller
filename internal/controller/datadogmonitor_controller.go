@@ -51,7 +51,7 @@ type DatadogMonitorReconciler struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *DatadogMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Fetch the DatadogMonitor instance
 	datadogMonitor := &datadoghqcomv1alpha1.DatadogMonitor{}
@@ -60,11 +60,11 @@ func (r *DatadogMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Return and don't requeue
-			log.Info("DatadogMonitor resource not found. Ignoring since object must be deleted")
+			logger.Info("DatadogMonitor resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
-		log.Error(err, "Failed to get DatadogMonitor")
+		logger.Error(err, "Failed to get DatadogMonitor")
 		return ctrl.Result{}, err
 	}
 
@@ -72,7 +72,7 @@ func (r *DatadogMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if !r.shouldCreateHealthCheck(datadogMonitor) {
 		// Check if we need to clean up an existing HealthCheck
 		if err := r.cleanupHealthCheckIfNeeded(ctx, datadogMonitor); err != nil {
-			log.Error(err, "Failed to cleanup HealthCheck")
+			logger.Error(err, "Failed to cleanup HealthCheck")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -80,7 +80,7 @@ func (r *DatadogMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Ensure HealthCheck exists
 	if err := r.ensureHealthCheck(ctx, datadogMonitor); err != nil {
-		log.Error(err, "Failed to ensure HealthCheck")
+		logger.Error(err, "Failed to ensure HealthCheck")
 		return ctrl.Result{}, err
 	}
 
@@ -100,7 +100,7 @@ func (r *DatadogMonitorReconciler) shouldCreateHealthCheck(monitor *datadoghqcom
 
 // ensureHealthCheck ensures that a HealthCheck resource exists for the DatadogMonitor
 func (r *DatadogMonitorReconciler) ensureHealthCheck(ctx context.Context, monitor *datadoghqcomv1alpha1.DatadogMonitor) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Generate HealthCheck name
 	healthCheckName := fmt.Sprintf("datadog-check-%s", monitor.Name)
@@ -146,7 +146,7 @@ func (r *DatadogMonitorReconciler) ensureHealthCheck(ctx context.Context, monito
 			return fmt.Errorf("failed to set controller reference: %w", err)
 		}
 
-		log.Info("Creating new HealthCheck", "name", healthCheckName, "namespace", monitor.Namespace)
+		logger.Info("Creating new HealthCheck", "name", healthCheckName, "namespace", monitor.Namespace)
 		if err := r.Create(ctx, healthCheck); err != nil {
 			return fmt.Errorf("failed to create HealthCheck: %w", err)
 		}
@@ -159,7 +159,7 @@ func (r *DatadogMonitorReconciler) ensureHealthCheck(ctx context.Context, monito
 
 // cleanupHealthCheckIfNeeded removes HealthCheck if the annotation is removed
 func (r *DatadogMonitorReconciler) cleanupHealthCheckIfNeeded(ctx context.Context, monitor *datadoghqcomv1alpha1.DatadogMonitor) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Generate HealthCheck name
 	healthCheckName := fmt.Sprintf("datadog-check-%s", monitor.Name)
@@ -181,14 +181,14 @@ func (r *DatadogMonitorReconciler) cleanupHealthCheckIfNeeded(ctx context.Contex
 	// Check if this HealthCheck is owned by our DatadogMonitor
 	isOwner := false
 	for _, ownerRef := range existingHealthCheck.OwnerReferences {
-		if ownerRef.UID == monitor.UID && ownerRef.Kind == "DatadogMonitor" && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
+		if ownerRef.UID == monitor.UID && ownerRef.Kind == datadogMonitorKind && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
 			isOwner = true
 			break
 		}
 	}
 
 	if isOwner {
-		log.Info("Deleting HealthCheck as annotation was removed", "name", healthCheckName, "namespace", monitor.Namespace)
+		logger.Info("Deleting HealthCheck as annotation was removed", "name", healthCheckName, "namespace", monitor.Namespace)
 		if err := r.Delete(ctx, existingHealthCheck); err != nil {
 			return fmt.Errorf("failed to delete HealthCheck: %w", err)
 		}
