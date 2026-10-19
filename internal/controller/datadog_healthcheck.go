@@ -139,7 +139,7 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		}
 	}
 	if len(monitors) == 0 {
-		return false, "", fmt.Errorf("no Datadog monitors match ids %v and tags %v", ids, monitorTags)
+		return false, fmt.Sprintf("No Datadog monitors carry tags %v; nothing to evaluate", monitorTags), nil
 	}
 
 	var alerting []string
@@ -162,7 +162,8 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		}
 	}
 	if evaluated == 0 {
-		return false, "", fmt.Errorf("none of the %d matched Datadog monitors has groups matching %v", len(monitors), groupTags)
+		return false, fmt.Sprintf("None of the %d matched Datadog monitors has groups matching %v; nothing to evaluate",
+			len(monitors), groupTags), nil
 	}
 	if len(alerting) > 0 {
 		sort.Strings(alerting)

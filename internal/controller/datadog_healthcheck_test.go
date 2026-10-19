@@ -133,12 +133,20 @@ var _ = Describe("Datadog class HealthChecks", func() {
 		Expect(*healthCheck.Status.Message).To(Equal("1 Datadog monitors OK"))
 	})
 
-	It("stays Pending when no monitor matches", func() {
+	It("is Healthy when no monitor carries the tags, since tagging is opt-in", func() {
 		api := &fakeDatadogAPI{monitors: map[int64]datadogMonitorState{}}
 		healthCheck := reconcileAndGet(api, createHealthCheck("no-match", HealthCheckClassDatadog,
 			map[string]string{AnnotationDatadogMonitorTags: "service:nope"}))
+		Expect(healthCheck.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
+		Expect(*healthCheck.Status.Message).To(ContainSubstring("nothing to evaluate"))
+	})
+
+	It("stays Pending when an explicit monitor ID does not exist", func() {
+		api := &fakeDatadogAPI{monitors: map[int64]datadogMonitorState{}}
+		healthCheck := reconcileAndGet(api, createHealthCheck("missing-id", HealthCheckClassDatadog,
+			map[string]string{AnnotationDatadogMonitorIDs: "99"}))
 		Expect(healthCheck.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusPending))
-		Expect(*healthCheck.Status.Message).To(ContainSubstring("no Datadog monitors match"))
+		Expect(*healthCheck.Status.Message).To(ContainSubstring("monitor 99 not found"))
 	})
 
 	It("stamps a new lastErrorTime when an alert outlives a rollout reset", func() {

@@ -111,7 +111,7 @@ spec:
 
 - A group counts unless it has one of the group-tag keys with a different value. So for a monitor grouped by `service`, only the `service:api` group counts, while a monitor not grouped by `service` is evaluated as a whole. A monitor without groups uses its overall state.
 - **Alert** makes the HealthCheck `Unhealthy`; every other monitor state is `Healthy`.
-- If nothing matches, the HealthCheck stays `Pending` and its message says why.
+- If no monitor carries the tags, or no group matches, the HealthCheck is `Healthy` and its message says nothing was evaluated. Tagging a monitor is how it opts in, so adding or removing monitors never blocks a deploy. A monitor ID that doesn't exist, or a Datadog API error, keeps the HealthCheck `Pending`.
 
 ### `datadog-incidents`: open incidents
 
