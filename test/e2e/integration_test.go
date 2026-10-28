@@ -194,6 +194,20 @@ spec:
 				"-n",
 				resourceNamespace,
 				"-o",
+				"jsonpath={.spec.class}",
+			)
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("datadog-monitor-crd"))
+
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
 				"jsonpath={.metadata.ownerReferences[0].kind}",
 			)
 			output, err = utils.Run(cmd)

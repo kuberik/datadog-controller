@@ -22,7 +22,7 @@ metadata:
 
 When the annotation is present:
 - A kuberik HealthCheck resource is automatically created
-- The HealthCheck is named `datadog-check-{monitor-name}`
+- The HealthCheck is named `datadog-check-{monitor-name}` and has `spec.class: datadog-monitor-crd`
 - Owner references are set to link the HealthCheck to the DatadogMonitor
 - The HealthCheck is placed in the same namespace as the DatadogMonitor
 

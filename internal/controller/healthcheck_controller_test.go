@@ -361,6 +361,31 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(updatedHealthCheck.Status.LastErrorTime.Time).To(BeTemporally(">=", firstErrorTime.Time))
 		})
 
+		It("should recognise a generated HealthCheck by its class alone", func() {
+			ctx := context.Background()
+			class := HealthCheckClassDatadogMonitorCRD
+			classOnly := &kuberikrolloutv1alpha1.HealthCheck{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "class-only-healthcheck",
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"kuberik.com/datadog-monitor-name": "test-datadog-monitor",
+					},
+				},
+				Spec: kuberikrolloutv1alpha1.HealthCheckSpec{Class: &class},
+			}
+			Expect(k8sClient.Create(ctx, classOnly)).To(Succeed())
+
+			controllerReconciler := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			key := types.NamespacedName{Name: "class-only-healthcheck", Namespace: namespace}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
+		})
+
 		It("should skip HealthChecks not managed by datadog-controller", func() {
 			ctx := context.Background()
 			By("creating a HealthCheck not managed by datadog-controller")

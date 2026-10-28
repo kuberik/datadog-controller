@@ -123,6 +123,7 @@ var _ = Describe("DatadogMonitor Controller", func() {
 			Expect(healthCheck.Labels["kuberik.com/managed-by"]).To(Equal("datadog-controller"))
 			Expect(healthCheck.Annotations["kuberik.com/datadog-monitor-name"]).To(Equal(resourceName))
 			Expect(healthCheck.Annotations["kuberik.com/datadog-monitor-uid"]).To(Equal(string(datadogMonitor.UID)))
+			Expect(healthCheck.Spec.Class).To(HaveValue(Equal(HealthCheckClassDatadogMonitorCRD)))
 
 			By("Verifying that all monitor labels were copied")
 			Expect(healthCheck.Labels["app"]).To(Equal("test-app"))
@@ -140,6 +141,28 @@ var _ = Describe("DatadogMonitor Controller", func() {
 			Expect(healthCheck.OwnerReferences[0].Kind).To(Equal("DatadogMonitor"))
 			Expect(healthCheck.OwnerReferences[0].Name).To(Equal(resourceName))
 			Expect(healthCheck.OwnerReferences[0].UID).To(Equal(datadogMonitor.UID))
+		})
+
+		It("should set the class on a HealthCheck generated before the class existed", func() {
+			ctx := context.Background()
+			controllerReconciler := &DatadogMonitorReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			key := types.NamespacedName{Name: "datadog-check-" + resourceName, Namespace: namespace}
+			By("clearing the class, as on a HealthCheck created by v0.1.0")
+			healthCheck := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, key, healthCheck)).To(Succeed())
+			healthCheck.Spec.Class = nil
+			Expect(k8sClient.Update(ctx, healthCheck)).To(Succeed())
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, key, healthCheck)).To(Succeed())
+			Expect(healthCheck.Spec.Class).To(HaveValue(Equal(HealthCheckClassDatadogMonitorCRD)))
 		})
 
 		It("should not create a HealthCheck when DatadogMonitor lacks health-check annotation", func() {

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -124,6 +125,7 @@ func (r *DatadogMonitorReconciler) ensureHealthCheck(ctx context.Context, monito
 					"kuberik.com/datadog-monitor-uid":  string(monitor.UID),
 				},
 			},
+			Spec: kuberikrolloutv1alpha1.HealthCheckSpec{Class: ptr.To(HealthCheckClassDatadogMonitorCRD)},
 		}
 
 		// Copy all labels from the monitor
@@ -152,9 +154,29 @@ func (r *DatadogMonitorReconciler) ensureHealthCheck(ctx context.Context, monito
 		}
 	} else if err != nil {
 		return fmt.Errorf("failed to get existing HealthCheck: %w", err)
+	} else if isOwnedBy(existingHealthCheck, monitor) &&
+		ptr.Deref(existingHealthCheck.Spec.Class, "") != HealthCheckClassDatadogMonitorCRD {
+		// HealthChecks generated before the class existed have none; set it in place.
+		original := existingHealthCheck.DeepCopy()
+		existingHealthCheck.Spec.Class = ptr.To(HealthCheckClassDatadogMonitorCRD)
+		logger.Info("Setting HealthCheck class", "name", healthCheckName, "class", HealthCheckClassDatadogMonitorCRD)
+		if err := r.Patch(ctx, existingHealthCheck, client.MergeFrom(original)); err != nil {
+			return fmt.Errorf("failed to set HealthCheck class: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// isOwnedBy reports whether the HealthCheck is owned by the DatadogMonitor.
+func isOwnedBy(healthCheck *kuberikrolloutv1alpha1.HealthCheck, monitor *datadoghqcomv1alpha1.DatadogMonitor) bool {
+	for _, ownerRef := range healthCheck.OwnerReferences {
+		if ownerRef.UID == monitor.UID && ownerRef.Kind == datadogMonitorKind &&
+			ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupHealthCheckIfNeeded removes HealthCheck if the annotation is removed
@@ -178,16 +200,7 @@ func (r *DatadogMonitorReconciler) cleanupHealthCheckIfNeeded(ctx context.Contex
 		return fmt.Errorf("failed to get existing HealthCheck: %w", err)
 	}
 
-	// Check if this HealthCheck is owned by our DatadogMonitor
-	isOwner := false
-	for _, ownerRef := range existingHealthCheck.OwnerReferences {
-		if ownerRef.UID == monitor.UID && ownerRef.Kind == datadogMonitorKind && ownerRef.APIVersion == datadoghqcomv1alpha1.GroupVersion.String() {
-			isOwner = true
-			break
-		}
-	}
-
-	if isOwner {
+	if isOwnedBy(existingHealthCheck, monitor) {
 		logger.Info("Deleting HealthCheck as annotation was removed", "name", healthCheckName, "namespace", monitor.Namespace)
 		if err := r.Delete(ctx, existingHealthCheck); err != nil {
 			return fmt.Errorf("failed to delete HealthCheck: %w", err)

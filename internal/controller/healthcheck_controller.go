@@ -107,6 +107,10 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 // isManagedByDatadogController checks if the HealthCheck is managed by our controller
 func (r *HealthCheckReconciler) isManagedByDatadogController(healthCheck *kuberikrolloutv1alpha1.HealthCheck) bool {
+	if healthCheck.Spec.Class != nil && *healthCheck.Spec.Class == HealthCheckClassDatadogMonitorCRD {
+		return true
+	}
+	// HealthChecks generated before the class existed only carry the label.
 	if healthCheck.Labels == nil {
 		return false
 	}

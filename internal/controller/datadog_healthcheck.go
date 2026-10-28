@@ -36,6 +36,9 @@ const (
 	HealthCheckClassDatadog = "datadog"
 	// HealthCheckClassDatadogIncidents is unhealthy while a matching Datadog incident is open.
 	HealthCheckClassDatadogIncidents = "datadog-incidents"
+	// HealthCheckClassDatadogMonitorCRD marks HealthChecks generated from an annotated
+	// DatadogMonitor resource; their state mirrors the resource's status.
+	HealthCheckClassDatadogMonitorCRD = "datadog-monitor-crd"
 
 	// AnnotationDatadogMonitorIDs is a comma-separated list of monitor IDs.
 	AnnotationDatadogMonitorIDs = "healthcheck.kuberik.com/datadog-monitor-ids"
