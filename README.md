@@ -22,7 +22,7 @@ metadata:
 
 When the annotation is present:
 - A kuberik HealthCheck resource is automatically created
-- The HealthCheck is named `datadog-check-{monitor-name}`
+- The HealthCheck is named `datadog-check-{monitor-name}` and has `spec.class: datadog-monitor-crd`
 - Owner references are set to link the HealthCheck to the DatadogMonitor
 - The HealthCheck is placed in the same namespace as the DatadogMonitor
 
@@ -82,6 +82,63 @@ The system consists of two main controllers:
 
 The controller uses the following annotation key:
 - `kuberik.com/health-check`: Set to `"true"` to enable HealthCheck creation
+
+## Datadog API HealthChecks
+
+HealthChecks of the classes below are evaluated by querying the Datadog API directly. They need no Datadog Operator and no DatadogMonitor resources. Every class polls Datadog every 60s; `healthcheck.kuberik.com/requeue-interval` changes that (minimum 10s).
+
+### `datadog`: monitor status
+
+Selects monitors by ID and/or monitor tags, and is Unhealthy while any selected monitor is alerting. Group tags then narrow each monitor to the groups that concern this HealthCheck:
+
+```yaml
+apiVersion: kuberik.com/v1alpha1
+kind: HealthCheck
+metadata:
+  name: api-datadog
+  labels:
+    app: api
+  annotations:
+    # Monitors carrying all of these tags.
+    healthcheck.kuberik.com/datadog-monitor-tags: "slo:http-success,env:prod"
+    # And/or explicit monitor IDs.
+    # healthcheck.kuberik.com/datadog-monitor-ids: "123456,234567"
+    # Only the service:api groups of monitors grouped by service.
+    healthcheck.kuberik.com/datadog-group-tags: "service:api,env:prod"
+spec:
+  class: datadog
+```
+
+- A group counts unless it has one of the group-tag keys with a different value. So for a monitor grouped by `service`, only the `service:api` group counts, while a monitor not grouped by `service` is evaluated as a whole. A monitor without groups uses its overall state.
+- **Alert** makes the HealthCheck `Unhealthy`; every other monitor state is `Healthy`.
+- If no monitor carries the tags, or no group matches, the HealthCheck is `Healthy` and its message says nothing was evaluated. Tagging a monitor is how it opts in, so adding or removing monitors never blocks a deploy. A monitor ID that doesn't exist, or a Datadog API error, keeps the HealthCheck `Pending`.
+
+### `datadog-incidents`: open incidents
+
+Unhealthy while any open (active or stable) Datadog incident matches a search query:
+
+```yaml
+metadata:
+  annotations:
+    healthcheck.kuberik.com/datadog-incident-query: 'services:api'
+spec:
+  class: datadog-incidents
+```
+
+### Credentials
+
+The controller reads one set of credentials for the whole cluster from its environment: `DD_API_KEY`, `DD_APP_KEY`, and optionally `DD_SITE` (default `datadoghq.com`). The install manifests take them from an optional `datadog-credentials` Secret in the controller namespace, with keys `api-key`, `app-key` and `site`:
+
+```bash
+kubectl -n kuberik-system create secret generic datadog-credentials \
+  --from-literal=api-key=... --from-literal=app-key=...
+```
+
+The application key needs the `monitors_read` scope, plus `incident_read` for `datadog-incidents`. Without credentials, these HealthChecks stay `Pending`.
+
+### Rollout semantics
+
+While a HealthCheck is `Unhealthy`, `lastErrorTime` keeps the time the failure was first seen. On a new deployment or a retry, the rollout controller resets the HealthCheck, so a failure still present after the reset is stamped with a new time and fails the bake.
 
 ## Monitoring
 

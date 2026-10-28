@@ -56,6 +56,25 @@ spec:
             - --health-probe-bind-address=:8081
           image: controller:latest
           name: manager
+          env:
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-credentials
+                  key: api-key
+                  optional: true
+            - name: DD_APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-credentials
+                  key: app-key
+                  optional: true
+            - name: DD_SITE
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-credentials
+                  key: site
+                  optional: true
           ports: []
           securityContext:
             readOnlyRootFilesystem: true

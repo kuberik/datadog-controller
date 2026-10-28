@@ -28,7 +28,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/apis/datadoghq/v1alpha1"
+	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/api/datadoghq/v1alpha1"
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
 )
 
@@ -359,6 +359,31 @@ var _ = Describe("HealthCheck Controller", func() {
 			// Since metav1.Now() might return the same time within the same second,
 			// we just verify that the field is properly set and not nil
 			Expect(updatedHealthCheck.Status.LastErrorTime.Time).To(BeTemporally(">=", firstErrorTime.Time))
+		})
+
+		It("should recognise a generated HealthCheck by its class alone", func() {
+			ctx := context.Background()
+			class := HealthCheckClassDatadogMonitorCRD
+			classOnly := &kuberikrolloutv1alpha1.HealthCheck{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "class-only-healthcheck",
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"kuberik.com/datadog-monitor-name": "test-datadog-monitor",
+					},
+				},
+				Spec: kuberikrolloutv1alpha1.HealthCheckSpec{Class: &class},
+			}
+			Expect(k8sClient.Create(ctx, classOnly)).To(Succeed())
+
+			controllerReconciler := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			key := types.NamespacedName{Name: "class-only-healthcheck", Namespace: namespace}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
 		})
 
 		It("should skip HealthChecks not managed by datadog-controller", func() {

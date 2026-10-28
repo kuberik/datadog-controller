@@ -35,17 +35,49 @@ var _ = Describe("Integration Tests", func() {
 
 		BeforeEach(func() {
 			// Clean up any existing resources
-			cmd := exec.Command("kubectl", "delete", "datadogmonitor", "--all", "-n", resourceNamespace, "--ignore-not-found=true")
+			cmd := exec.Command(
+				"kubectl",
+				"delete",
+				"datadogmonitor",
+				"--all",
+				"-n",
+				resourceNamespace,
+				"--ignore-not-found=true",
+			)
 			_, _ = utils.Run(cmd)
-			cmd = exec.Command("kubectl", "delete", "healthcheck", "--all", "-n", resourceNamespace, "--ignore-not-found=true")
+			cmd = exec.Command(
+				"kubectl",
+				"delete",
+				"healthcheck",
+				"--all",
+				"-n",
+				resourceNamespace,
+				"--ignore-not-found=true",
+			)
 			_, _ = utils.Run(cmd)
 		})
 
 		AfterEach(func() {
 			// Clean up any remaining resources
-			cmd := exec.Command("kubectl", "delete", "datadogmonitor", "--all", "-n", resourceNamespace, "--ignore-not-found=true")
+			cmd := exec.Command(
+				"kubectl",
+				"delete",
+				"datadogmonitor",
+				"--all",
+				"-n",
+				resourceNamespace,
+				"--ignore-not-found=true",
+			)
 			_, _ = utils.Run(cmd)
-			cmd = exec.Command("kubectl", "delete", "healthcheck", "--all", "-n", resourceNamespace, "--ignore-not-found=true")
+			cmd = exec.Command(
+				"kubectl",
+				"delete",
+				"healthcheck",
+				"--all",
+				"-n",
+				resourceNamespace,
+				"--ignore-not-found=true",
+			)
 			_, _ = utils.Run(cmd)
 		})
 
@@ -61,33 +93,63 @@ metadata:
 spec:
   name: "Integration Test Monitor"
   type: "metric alert"
-  query: "avg(last_5m):avg:system.cpu.user{*} > 80"
-status:
-  monitorState: "OK"`, monitorName, resourceNamespace)
+  query: "avg(last_5m):avg:system.cpu.user{*} > 80"`, monitorName, resourceNamespace)
 
 			// Write YAML to temporary file
 			tmpFile, err := os.CreateTemp("", "monitor-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpFile.Name())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
 			_, err = tmpFile.WriteString(monitorYaml)
 			Expect(err).NotTo(HaveOccurred())
-			tmpFile.Close()
+			Expect(tmpFile.Close()).To(Succeed())
 
 			// Apply the monitor
 			cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--subresource=status",
+				"--type",
+				"merge",
+				"-p",
+				`{"status":{"monitorState":"OK"}}`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
 			By("Waiting for the HealthCheck to be created by DatadogMonitor controller")
 			Eventually(func() error {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace)
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+				)
 				_, err := utils.Run(cmd)
 				return err
 			}, time.Second*15, time.Millisecond*250).Should(Succeed())
 
 			By("Waiting for the HealthCheck status to be updated to Healthy by HealthCheck controller")
 			Eventually(func() string {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.status.status}")
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+					"-o",
+					"jsonpath={.status.status}",
+				)
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return ""
@@ -96,34 +158,105 @@ status:
 			}, time.Second*15, time.Millisecond*250).Should(Equal("Healthy"))
 
 			By("Verifying the HealthCheck has correct metadata and owner reference")
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.metadata.labels.kuberik\\.com/datadog-monitor}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.metadata.labels.kuberik\\.com/datadog-monitor}",
+			)
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal(monitorName))
 
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.metadata.labels.kuberik\\.com/managed-by}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.metadata.labels.kuberik\\.com/managed-by}",
+			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal("datadog-controller"))
 
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.metadata.ownerReferences[0].kind}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.spec.class}",
+			)
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("datadog-monitor-crd"))
+
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.metadata.ownerReferences[0].kind}",
+			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal("DatadogMonitor"))
 
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.metadata.ownerReferences[0].name}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.metadata.ownerReferences[0].name}",
+			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal(monitorName))
 
 			By("Updating the DatadogMonitor status to Alert")
-			cmd = exec.Command("kubectl", "patch", "datadogmonitor", monitorName, "-n", resourceNamespace, "--type", "merge", "-p", `{"status":{"monitorState":"Alert"}}`)
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--subresource=status",
+				"--type",
+				"merge",
+				"-p",
+				`{"status":{"monitorState":"Alert"}}`,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for the HealthCheck status to be updated to Unhealthy")
 			Eventually(func() string {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.status.status}")
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+					"-o",
+					"jsonpath={.status.status}",
+				)
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return ""
@@ -132,19 +265,49 @@ status:
 			}, time.Second*15, time.Millisecond*250).Should(Equal("Unhealthy"))
 
 			By("Verifying the HealthCheck has an error time")
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.status.lastErrorTime}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.status.lastErrorTime}",
+			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).NotTo(BeEmpty())
 
 			By("Updating the DatadogMonitor status back to OK")
-			cmd = exec.Command("kubectl", "patch", "datadogmonitor", monitorName, "-n", resourceNamespace, "--type", "merge", "-p", `{"status":{"monitorState":"OK"}}`)
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--subresource=status",
+				"--type",
+				"merge",
+				"-p",
+				`{"status":{"monitorState":"OK"}}`,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for the HealthCheck status to be updated back to Healthy")
 			Eventually(func() string {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.status.status}")
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+					"-o",
+					"jsonpath={.status.status}",
+				)
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return ""
@@ -153,10 +316,19 @@ status:
 			}, time.Second*15, time.Millisecond*250).Should(Equal("Healthy"))
 
 			By("Verifying the HealthCheck has no error time")
-			cmd = exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace, "-o", "jsonpath={.status.lastErrorTime}")
+			cmd = exec.Command(
+				"kubectl",
+				"get",
+				"healthcheck",
+				"datadog-check-"+monitorName,
+				"-n",
+				resourceNamespace,
+				"-o",
+				"jsonpath={.status.lastErrorTime}",
+			)
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(BeEmpty())
+			Expect(output).NotTo(BeEmpty(), "lastErrorTime is kept after recovery")
 		})
 
 		It("Should handle lifecycle: create, update, delete", func() {
@@ -176,10 +348,10 @@ spec:
 			// Write YAML to temporary file
 			tmpFile, err := os.CreateTemp("", "monitor-*.yaml")
 			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpFile.Name())
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
 			_, err = tmpFile.WriteString(monitorYaml)
 			Expect(err).NotTo(HaveOccurred())
-			tmpFile.Close()
+			Expect(tmpFile.Close()).To(Succeed())
 
 			// Apply the monitor
 			cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
@@ -188,31 +360,74 @@ spec:
 
 			By("Waiting for the HealthCheck to be created")
 			Eventually(func() error {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace)
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+				)
 				_, err := utils.Run(cmd)
 				return err
 			}, time.Second*15, time.Millisecond*250).Should(Succeed())
 
 			By("Removing the health-check annotation")
-			cmd = exec.Command("kubectl", "patch", "datadogmonitor", monitorName, "-n", resourceNamespace, "--type", "merge", "-p", `{"metadata":{"annotations":{}}}`)
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--type",
+				"merge",
+				"-p",
+				`{"metadata":{"annotations":{"kuberik.com/health-check":null}}}`,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for the HealthCheck to be deleted")
 			Eventually(func() error {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace)
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+				)
 				_, err := utils.Run(cmd)
 				return err
 			}, time.Second*15, time.Millisecond*250).Should(HaveOccurred())
 
 			By("Adding the health-check annotation back")
-			cmd = exec.Command("kubectl", "patch", "datadogmonitor", monitorName, "-n", resourceNamespace, "--type", "merge", "-p", `{"metadata":{"annotations":{"kuberik.com/health-check":"true"}}}`)
+			cmd = exec.Command(
+				"kubectl",
+				"patch",
+				"datadogmonitor",
+				monitorName,
+				"-n",
+				resourceNamespace,
+				"--type",
+				"merge",
+				"-p",
+				`{"metadata":{"annotations":{"kuberik.com/health-check":"true"}}}`,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for the HealthCheck to be created again")
 			Eventually(func() error {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace)
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+				)
 				_, err := utils.Run(cmd)
 				return err
 			}, time.Second*15, time.Millisecond*250).Should(Succeed())
@@ -224,7 +439,14 @@ spec:
 
 			By("Verifying the HealthCheck is also deleted (due to owner reference)")
 			Eventually(func() error {
-				cmd := exec.Command("kubectl", "get", "healthcheck", "datadog-check-"+monitorName, "-n", resourceNamespace)
+				cmd := exec.Command(
+					"kubectl",
+					"get",
+					"healthcheck",
+					"datadog-check-"+monitorName,
+					"-n",
+					resourceNamespace,
+				)
 				_, err := utils.Run(cmd)
 				return err
 			}, time.Second*15, time.Millisecond*250).Should(HaveOccurred())
