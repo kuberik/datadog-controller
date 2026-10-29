@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -83,10 +84,19 @@ func newDatadogAPIFromEnv() (datadogAPI, error) {
 	if apiKey == "" || appKey == "" {
 		return nil, fmt.Errorf("%w: set %s and %s", errDatadogNotConfigured, datadogAltAPIKeyEnvVar, datadogAltAppKeyEnvVar)
 	}
+	site := firstNonEmpty(os.Getenv(datadogSiteEnvVar), os.Getenv(datadogAltSiteEnvVar), defaultDatadogSite)
+	return newDatadogAPIClient(apiKey, appKey, site, nil), nil
+}
 
+// newDatadogAPIClient builds a client for the given site. servers overrides the
+// Datadog API endpoints and is only set by tests.
+func newDatadogAPIClient(apiKey, appKey, site string, servers datadog.ServerConfigurations) *datadogAPIClient {
 	configuration := datadog.NewConfiguration()
 	configuration.SetUnstableOperationEnabled("v2.SearchIncidents", true)
-	configuration.HTTPClient.Timeout = 30 * time.Second
+	configuration.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	if servers != nil {
+		configuration.Servers = servers
+	}
 	apiClient := datadog.NewAPIClient(configuration)
 
 	return &datadogAPIClient{
@@ -94,10 +104,8 @@ func newDatadogAPIFromEnv() (datadogAPI, error) {
 		incidents: datadogV2.NewIncidentsApi(apiClient),
 		apiKey:    apiKey,
 		appKey:    appKey,
-		site: strings.TrimPrefix(strings.TrimPrefix(
-			firstNonEmpty(os.Getenv(datadogSiteEnvVar), os.Getenv(datadogAltSiteEnvVar), defaultDatadogSite),
-			"https://"), "api."),
-	}, nil
+		site:      strings.TrimPrefix(strings.TrimPrefix(site, "https://"), "api."),
+	}
 }
 
 func (c *datadogAPIClient) requestContext(ctx context.Context) context.Context {

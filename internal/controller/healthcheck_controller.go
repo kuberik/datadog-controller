@@ -75,7 +75,7 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Check if this HealthCheck is managed by our controller
 	if !r.isManagedByDatadogController(healthCheck) {
-		logger.Info("HealthCheck is not managed by datadog-controller, skipping")
+		logger.V(1).Info("HealthCheck is not managed by datadog-controller, skipping")
 		return ctrl.Result{}, nil
 	}
 
