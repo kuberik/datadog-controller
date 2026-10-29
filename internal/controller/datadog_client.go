@@ -120,7 +120,7 @@ func (c *datadogAPIClient) GetMonitor(ctx context.Context, id int64) (datadogMon
 	monitor, _, err := c.monitors.GetMonitor(c.requestContext(ctx), id,
 		*datadogV1.NewGetMonitorOptionalParameters().WithGroupStates("all"))
 	if err != nil {
-		return datadogMonitorState{}, fmt.Errorf("get monitor %d: %w", id, err)
+		return datadogMonitorState{}, fmt.Errorf("get monitor %d: %w", id, withResponseBody(err))
 	}
 	return toMonitorState(monitor), nil
 }
@@ -134,7 +134,7 @@ func (c *datadogAPIClient) ListMonitorsByTags(ctx context.Context, tags []string
 			WithPage(page).
 			WithPageSize(monitorListPageSize))
 		if err != nil {
-			return nil, fmt.Errorf("list monitors with tags %v: %w", tags, err)
+			return nil, fmt.Errorf("list monitors with tags %v: %w", tags, withResponseBody(err))
 		}
 		for _, monitor := range result {
 			monitors = append(monitors, toMonitorState(monitor))
@@ -146,13 +146,16 @@ func (c *datadogAPIClient) ListMonitorsByTags(ctx context.Context, tags []string
 }
 
 func (c *datadogAPIClient) SearchOpenIncidents(ctx context.Context, query string) ([]datadogIncident, error) {
-	fullQuery := fmt.Sprintf("state:(active OR stable) AND (%s)", query)
+	// Incident search joins facets with AND and groups only a facet's values in
+	// parentheses (severity:(SEV-1 OR SEV-2)); wrapping a whole facet expression
+	// in parentheses is a 400.
+	fullQuery := "state:(active OR stable) AND " + query
 	var incidents []datadogIncident
 	for offset := int64(0); ; offset += incidentSearchPageSz {
 		result, _, err := c.incidents.SearchIncidents(c.requestContext(ctx), fullQuery,
 			*datadogV2.NewSearchIncidentsOptionalParameters().WithPageSize(incidentSearchPageSz).WithPageOffset(offset))
 		if err != nil {
-			return nil, fmt.Errorf("search incidents %q: %w", fullQuery, err)
+			return nil, fmt.Errorf("search incidents %q: %w", fullQuery, withResponseBody(err))
 		}
 		attributes := result.Data.Attributes
 		if attributes == nil {
@@ -172,6 +175,16 @@ func (c *datadogAPIClient) SearchOpenIncidents(ctx context.Context, query string
 			return incidents, nil
 		}
 	}
+}
+
+// withResponseBody adds Datadog's response body to API errors, which otherwise
+// only carry the HTTP status (e.g. "400 Bad Request" without the reason).
+func withResponseBody(err error) error {
+	var apiErr datadog.GenericOpenAPIError
+	if errors.As(err, &apiErr) && len(apiErr.Body()) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(apiErr.Body())))
+	}
+	return err
 }
 
 func toMonitorState(monitor datadogV1.Monitor) datadogMonitorState {
