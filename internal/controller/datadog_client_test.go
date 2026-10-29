@@ -115,6 +115,19 @@ func TestDatadogAPIClientListMonitorsByTags(t *testing.T) {
 	}
 }
 
+func TestDatadogAPIErrorsIncludeResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"errors": ["Invalid query"]}`)
+	}))
+	t.Cleanup(server.Close)
+	_, err := newTestClient(server.URL).SearchOpenIncidents(context.Background(), "services:api")
+	if err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "Invalid query") {
+		t.Fatalf("error = %v, want status and response body", err)
+	}
+}
+
 func TestDatadogAPIClientSearchOpenIncidents(t *testing.T) {
 	server, requests := fakeDatadogServer(t)
 	incidents, err := newTestClient(server.URL).SearchOpenIncidents(context.Background(), "services:api")
@@ -124,8 +137,7 @@ func TestDatadogAPIClientSearchOpenIncidents(t *testing.T) {
 	if len(incidents) != 1 || incidents[0].PublicID != 42 || incidents[0].Title != "API down" {
 		t.Fatalf("unexpected incidents %+v", incidents)
 	}
-	if query := (*requests)[0].URL.Query().Get("query"); !strings.Contains(query, "services:api") ||
-		!strings.Contains(query, "state:(active OR stable)") {
+	if query := (*requests)[0].URL.Query().Get("query"); query != "state:(active OR stable) AND services:api" {
 		t.Fatalf("unexpected incident query %q", query)
 	}
 }

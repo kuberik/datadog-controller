@@ -115,7 +115,7 @@ spec:
 
 ### `datadog-incidents`: open incidents
 
-Unhealthy while any open (active or stable) Datadog incident matches a search query:
+Unhealthy while any open (active or stable) Datadog incident matches a search query. The query is appended as `state:(active OR stable) AND <query>`. Write it the way Datadog's incident search expects: facets joined with `AND`, and parentheses only around one facet's values, e.g. `services:api AND severity:(SEV-1 OR SEV-2)`.
 
 ```yaml
 metadata:
