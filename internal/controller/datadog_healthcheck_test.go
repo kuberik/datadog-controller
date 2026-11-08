@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,6 +36,13 @@ type fakeDatadogAPI struct {
 	incidents      []datadogIncident
 	incidentQuery  string
 	listedWithTags []string
+	series         []metricSeries
+	queriedMetric  string
+}
+
+func (f *fakeDatadogAPI) QueryMetric(_ context.Context, query string, _ time.Duration) ([]metricSeries, error) {
+	f.queriedMetric = query
+	return f.series, nil
 }
 
 func (f *fakeDatadogAPI) GetMonitor(_ context.Context, id int64) (datadogMonitorState, error) {
@@ -184,6 +192,63 @@ var _ = Describe("Datadog class HealthChecks", func() {
 		healthCheck = reconcileAndGet(api, client.ObjectKeyFromObject(healthCheck))
 		Expect(healthCheck.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
 		Expect(healthCheck.Status.LastErrorTime).NotTo(BeNil(), "lastErrorTime is kept after recovery")
+	})
+
+	It("writes a Threshold observation for a metric monitor and a Count for incidents", func() {
+		critical := 80.0
+		api := &fakeDatadogAPI{
+			monitors: map[int64]datadogMonitorState{5: {
+				ID: 5, Name: "cpu", OverallState: "OK", Type: "query alert",
+				Query:    "avg(last_5m):avg:system.cpu.user{service:api} by {service} > 80",
+				Critical: &critical,
+			}},
+			series: []metricSeries{{Tags: []string{"service:api"}, Points: []float64{60, 70, 80}, Unit: "millisecond"}},
+		}
+		key := createHealthCheck("threshold", HealthCheckClassDatadog, map[string]string{AnnotationDatadogMonitorIDs: "5"})
+		healthCheck := reconcileAndGet(api, key)
+		Expect(api.queriedMetric).To(Equal("avg:system.cpu.user{service:api} by {service}"))
+		Expect(healthCheck.Status.Observations).To(HaveLen(1))
+		obs := healthCheck.Status.Observations[0]
+		Expect(obs.Name).To(Equal("cpu"))
+		Expect(obs.Kind).To(Equal(kuberikrolloutv1alpha1.ObservationKindThreshold))
+		Expect(obs.Value).To(Equal("70"))
+		Expect(obs.Limit).To(Equal("80"))
+		Expect(obs.Direction).To(Equal(kuberikrolloutv1alpha1.ObservationDirectionAbove))
+		Expect(obs.Unit).To(Equal("Milliseconds"))
+		Expect(obs.Window).To(Equal("5m"))
+		Expect(*obs.Healthy).To(BeTrue())
+		Expect(obs.ObservedTime).NotTo(BeNil())
+
+		By("not rewriting status when nothing changed")
+		resourceVersion := healthCheck.ResourceVersion
+		Expect(reconcileAndGet(api, key).ResourceVersion).To(Equal(resourceVersion))
+
+		By("writing a Count for incidents")
+		inc := reconcileAndGet(&fakeDatadogAPI{incidents: []datadogIncident{{PublicID: 1, Title: "x"}, {PublicID: 2, Title: "y"}}},
+			createHealthCheck("incident-count", HealthCheckClassDatadogIncidents,
+				map[string]string{AnnotationDatadogIncidentQuery: "services:api"}))
+		Expect(inc.Status.Observations).To(HaveLen(1))
+		Expect(inc.Status.Observations[0].Kind).To(Equal(kuberikrolloutv1alpha1.ObservationKindCount))
+		Expect(inc.Status.Observations[0].Name).To(Equal("open incidents"))
+		Expect(inc.Status.Observations[0].Value).To(Equal("2"))
+		Expect(*inc.Status.Observations[0].Healthy).To(BeFalse())
+	})
+
+	It("writes a State observation for a non-metric monitor, and when no value is available", func() {
+		api := &fakeDatadogAPI{monitors: map[int64]datadogMonitorState{
+			6: {ID: 6, Name: "ping", OverallState: "Alert", Type: "service check", Query: `"http.can_connect".over("*").last(2).count_by_status()`},
+			7: {ID: 7, Name: "latency", OverallState: "OK", Type: "metric alert", Query: "avg(last_10m):avg:lat{*} > 5"},
+		}}
+		healthCheck := reconcileAndGet(api, createHealthCheck("state", HealthCheckClassDatadog,
+			map[string]string{AnnotationDatadogMonitorIDs: "6,7"}))
+		Expect(healthCheck.Status.Observations).To(HaveLen(2))
+		Expect(healthCheck.Status.Observations[0].Name).To(Equal("ping"), "failing observations come first")
+		for _, obs := range healthCheck.Status.Observations {
+			Expect(obs.Kind).To(Equal(kuberikrolloutv1alpha1.ObservationKindState))
+			Expect(obs.Value).To(BeEmpty())
+		}
+		Expect(*healthCheck.Status.Observations[0].Healthy).To(BeFalse())
+		Expect(*healthCheck.Status.Observations[1].Healthy).To(BeTrue())
 	})
 
 	It("stays Pending without Datadog credentials", func() {

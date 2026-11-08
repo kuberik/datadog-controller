@@ -386,6 +386,20 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(updated.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusHealthy))
 		})
 
+		It("should write a State observation for the DatadogMonitor resource", func() {
+			ctx := context.Background()
+			controllerReconciler := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Observations).To(HaveLen(1))
+			Expect(updated.Status.Observations[0].Name).To(Equal("test-monitor"))
+			Expect(updated.Status.Observations[0].Kind).To(Equal(kuberikrolloutv1alpha1.ObservationKindState))
+			Expect(*updated.Status.Observations[0].Healthy).To(BeTrue())
+		})
+
 		It("should skip HealthChecks not managed by datadog-controller", func() {
 			ctx := context.Background()
 			By("creating a HealthCheck not managed by datadog-controller")

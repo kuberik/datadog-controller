@@ -125,6 +125,16 @@ spec:
   class: datadog-incidents
 ```
 
+### Observations
+
+Besides the status and message, these HealthChecks write typed `status.observations` that the dashboard draws as a figure (requires a rollout-controller that has the field):
+
+- `datadog` and the `DatadogMonitor` resource path write one observation per monitor (failing first, at most 16). For `metric alert` and `query alert` monitors whose query looks like `avg(last_5m):<metric> > 80` this is a **Threshold**: `limit` is `options.thresholds.critical` (or the number in the query), `direction` is `Above` for `>`/`>=` and `Below` for `<`/`<=`, `window` is the evaluation window (`last_5m` becomes `5m`), and `healthy` is true for OK, false for Alert or Warn, and unset for no data. Every other case is a **State** carrying only the name and `healthy`: service checks, composite, log/APM/RUM monitors, `change()`/`pct_change()` queries, `==`/`!=` comparators, or a monitor whose value could not be fetched.
+- Datadog's monitor API does not expose the value a monitor last evaluated. The controller therefore runs the monitor's own metric query over its window (`GET /api/v1/query`, the aggregator `avg`/`sum`/`min`/`max`/`last` applied client-side), narrowed to the series matching the group tags; with several series it reports the one closest to breaching. This needs the `timeseries_query` application key scope. On the `DatadogMonitor` resource path it only happens when the controller has credentials; otherwise the observation is a State.
+- Numbers are plain decimals (no exponent). `unit` is set only for time units Datadog reports (`Milliseconds`, `Seconds`); Datadog percentages are 0..100, not the 0..1 ratio `Percent` means, so they have no unit.
+- `datadog-incidents` writes one **Count** named `open incidents` with the number of matching open incidents; `healthy` is true when it is 0.
+- `observedTime` changes only when the observation does, so a steady value does not rewrite the HealthCheck on every poll.
+
 ### Credentials
 
 The controller reads one set of credentials for the whole cluster from its environment: `DD_API_KEY`, `DD_APP_KEY`, and optionally `DD_SITE` (default `datadoghq.com`). The install manifests take them from an optional `datadog-credentials` Secret in the controller namespace, with keys `api-key`, `app-key` and `site`:
@@ -134,7 +144,7 @@ kubectl -n kuberik-system create secret generic datadog-credentials \
   --from-literal=api-key=... --from-literal=app-key=...
 ```
 
-The application key needs the `monitors_read` scope, plus `incident_read` for `datadog-incidents`. Without credentials, these HealthChecks stay `Pending`.
+The application key needs the `monitors_read` scope, plus `incident_read` for `datadog-incidents` and `timeseries_query` for observation values. Without credentials, these HealthChecks stay `Pending`.
 
 ### Rollout semantics
 
