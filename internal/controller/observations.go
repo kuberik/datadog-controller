@@ -4,25 +4,19 @@ import (
 	"context"
 	"math"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 type observation = kuberikrolloutv1alpha1.HealthCheckObservation
 
 const (
-	// maxObservations mirrors the CRD's MaxItems on status.observations.
-	maxObservations = 16
-
 	incidentsObservationName = "open incidents"
 )
 
@@ -110,19 +104,6 @@ func comparatorDirection(comparator string) (kuberikrolloutv1alpha1.HealthCheckO
 		return kuberikrolloutv1alpha1.ObservationDirectionBelow, true
 	}
 	return "", false
-}
-
-// formatDecimal renders v as a plain decimal matching the CRD pattern
-// ^-?[0-9]+(\.[0-9]+)?$: no exponent, no suffix. ok is false for NaN/Inf.
-func formatDecimal(v float64) (string, bool) {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return "", false
-	}
-	s := strconv.FormatFloat(v, 'f', -1, 64)
-	if s == "-0" {
-		s = "0"
-	}
-	return s, true
 }
 
 // aggregate applies a monitor time aggregation to a series' points.
@@ -246,7 +227,7 @@ func monitorObservation(ctx context.Context, q metricQuerier, m monitorFacts, gr
 	if m.Critical != nil {
 		limit = *m.Critical
 	}
-	limitStr, ok := formatDecimal(limit)
+	limitStr, ok := obs.FormatDecimal(limit)
 	if !ok {
 		return state
 	}
@@ -254,7 +235,7 @@ func monitorObservation(ctx context.Context, q metricQuerier, m monitorFacts, gr
 	if !ok {
 		return state
 	}
-	valueStr, ok := formatDecimal(value)
+	valueStr, ok := obs.FormatDecimal(value)
 	if !ok {
 		return state
 	}
@@ -301,67 +282,4 @@ func healthFromStatuses(statuses []string) *bool {
 		return &t
 	}
 	return nil
-}
-
-// sortObservations puts failing observations first, then by name, and caps the list.
-func sortObservations(obs []observation) []observation {
-	rank := func(o observation) int {
-		switch {
-		case o.Healthy != nil && !*o.Healthy:
-			return 0
-		case o.Healthy == nil:
-			return 1
-		}
-		return 2
-	}
-	sort.SliceStable(obs, func(i, j int) bool {
-		if ri, rj := rank(obs[i]), rank(obs[j]); ri != rj {
-			return ri < rj
-		}
-		return obs[i].Name < obs[j].Name
-	})
-	if len(obs) > maxObservations {
-		obs = obs[:maxObservations]
-	}
-	return obs
-}
-
-// mergeObservations keeps the previous ObservedTime of observations that did not
-// change, so a steady value does not rewrite status (and wake watchers) on
-// every poll. It reports whether the list differs from existing.
-func mergeObservations(existing, updated []observation) ([]observation, bool) {
-	merged := make([]observation, len(updated))
-	changed := len(existing) != len(updated)
-	for i, o := range updated {
-		merged[i] = o
-		if i < len(existing) {
-			prev, next := existing[i], o
-			prev.ObservedTime, next.ObservedTime = nil, nil
-			if equality.Semantic.DeepEqual(prev, next) && existing[i].ObservedTime != nil {
-				merged[i].ObservedTime = existing[i].ObservedTime
-				continue
-			}
-		}
-		changed = true
-	}
-	return merged, changed
-}
-
-// ignoreObservationOnlyUpdates drops HealthCheck update events whose only change
-// is status.observations, which this controller writes itself; a drifting metric
-// value would otherwise retrigger a reconcile (and a Datadog query) on every poll.
-func ignoreObservationOnlyUpdates() predicate.Predicate {
-	return predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
-		oldHC, ok1 := e.ObjectOld.(*kuberikrolloutv1alpha1.HealthCheck)
-		newHC, ok2 := e.ObjectNew.(*kuberikrolloutv1alpha1.HealthCheck)
-		if !ok1 || !ok2 || equality.Semantic.DeepEqual(oldHC.Status.Observations, newHC.Status.Observations) {
-			return true
-		}
-		oldStatus, newStatus := oldHC.Status.DeepCopy(), newHC.Status.DeepCopy()
-		oldStatus.Observations, newStatus.Observations = nil, nil
-		return !(oldHC.Generation == newHC.Generation &&
-			equality.Semantic.DeepEqual(oldHC.Labels, newHC.Labels) &&
-			equality.Semantic.DeepEqual(oldHC.Annotations, newHC.Annotations) &&
-			equality.Semantic.DeepEqual(oldStatus, newStatus))
-	}}
 }

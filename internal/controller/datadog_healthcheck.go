@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 const (
@@ -148,7 +149,7 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 	}
 
 	querier, _ := api.(metricQuerier)
-	var observations []observation
+	observations := make([]observation, 0, len(monitors))
 	var alerting []string
 	evaluated := 0
 	for _, monitor := range monitors {
@@ -178,7 +179,7 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		return false, fmt.Sprintf("None of the %d matched Datadog monitors has groups matching %v; nothing to evaluate",
 			len(monitors), groupTags), nil, nil
 	}
-	observations = sortObservations(observations)
+	observations = obs.Sort(observations)
 	if len(alerting) > 0 {
 		sort.Strings(alerting)
 		return true, fmt.Sprintf("%d of %d Datadog monitors alerting: %s",
@@ -280,7 +281,7 @@ func (r *HealthCheckReconciler) setStatusWithObservations(
 	}
 	observationsChanged := false
 	if writeObservations {
-		observations, observationsChanged = mergeObservations(healthCheck.Status.Observations, observations)
+		observations, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations)
 	}
 	if healthCheck.Status.Status == status && currentMessage == message && lastErrorTime == healthCheck.Status.LastErrorTime && !observationsChanged {
 		return nil

@@ -35,6 +35,7 @@ import (
 
 	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/api/datadoghq/v1alpha1"
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 // HealthCheckReconciler reconciles a HealthCheck object
@@ -250,7 +251,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 	observationsChanged := false
 	writeObservations := len(observations) > 0
 	if writeObservations {
-		merged, observationsChanged = mergeObservations(healthCheck.Status.Observations, observations[0])
+		merged, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations[0])
 	}
 	if !observationsChanged && healthCheck.Status.Status == status &&
 		((healthCheck.Status.LastErrorTime == nil && lastErrorTime == nil) ||
@@ -304,7 +305,7 @@ func (r *HealthCheckReconciler) enqueueHealthChecksForMonitor(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *HealthCheckReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kuberikrolloutv1alpha1.HealthCheck{}, builder.WithPredicates(ignoreObservationOnlyUpdates())).
+		For(&kuberikrolloutv1alpha1.HealthCheck{}, builder.WithPredicates(obs.IgnoreObservationOnlyUpdates())).
 		Watches(
 			&datadoghqcomv1alpha1.DatadogMonitor{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueHealthChecksForMonitor),

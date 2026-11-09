@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"regexp"
 	"testing"
 	"time"
 
@@ -60,25 +59,6 @@ func TestParseWindow(t *testing.T) {
 	}
 }
 
-func TestFormatDecimalMatchesCRDPattern(t *testing.T) {
-	pattern := regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
-	for in, want := range map[float64]string{0: "0", 80: "80", 0.5: "0.5", -2.25: "-2.25", 1e21: "1000000000000000000000", 1e-7: "0.0000001", 123456789.123: "123456789.123"} {
-		got, ok := formatDecimal(in)
-		if !ok || got != want || !pattern.MatchString(got) {
-			t.Errorf("formatDecimal(%v)=%q,%v want %q", in, got, ok, want)
-		}
-	}
-	negZero := 0.0
-	negZero = -negZero
-	if got, _ := formatDecimal(negZero * 1); got != "0" {
-		t.Errorf("negative zero formatted as %q", got)
-	}
-	nan := 0.0
-	if _, ok := formatDecimal(nan / nan); ok {
-		t.Error("NaN must be rejected")
-	}
-}
-
 type stubQuerier struct{ series []metricSeries }
 
 func (s stubQuerier) QueryMetric(context.Context, string, time.Duration) ([]metricSeries, error) {
@@ -126,19 +106,5 @@ func TestIncidentsObservation(t *testing.T) {
 	}
 	if some.Value != "3" || *some.Healthy {
 		t.Errorf("3 incidents: %+v", some)
-	}
-}
-
-func TestMergeObservationsKeepsObservedTimeWhenUnchanged(t *testing.T) {
-	old := metav1.NewTime(time.Now().Add(-time.Hour))
-	now := metav1.Now()
-	existing := []observation{{Name: "a", Kind: "Count", Value: "1", ObservedTime: &old}}
-	merged, changed := mergeObservations(existing, []observation{{Name: "a", Kind: "Count", Value: "1", ObservedTime: &now}})
-	if changed || !merged[0].ObservedTime.Equal(&old) {
-		t.Errorf("unchanged observation must keep its time: changed=%v %+v", changed, merged)
-	}
-	merged, changed = mergeObservations(existing, []observation{{Name: "a", Kind: "Count", Value: "2", ObservedTime: &now}})
-	if !changed || !merged[0].ObservedTime.Equal(&now) {
-		t.Errorf("changed observation must take the new time: %+v", merged)
 	}
 }
