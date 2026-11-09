@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 func TestParseMonitorQuery(t *testing.T) {
@@ -74,16 +75,16 @@ func TestMonitorObservation(t *testing.T) {
 		{Tags: []string{"host:a"}, Points: []float64{10, 20}},
 		{Tags: []string{"host:b"}, Points: []float64{70, 85.5}},
 	}}
-	obs := monitorObservation(context.Background(), q, facts, nil, now)
-	if obs.Kind != kuberikrolloutv1alpha1.ObservationKindThreshold || obs.Value != "85.5" || obs.Limit != "90" ||
-		obs.Direction != kuberikrolloutv1alpha1.ObservationDirectionAbove || obs.Window != "5m" || obs.Unit != "" {
-		t.Errorf("unexpected threshold observation: %+v", obs)
+	got := monitorObservation(context.Background(), q, facts, nil, now)
+	if got.Kind != kuberikrolloutv1alpha1.ObservationKindThreshold || got.Value != "85.5" || got.Limit != "90" ||
+		got.Direction != kuberikrolloutv1alpha1.ObservationDirectionAbove || got.Window != "5m" || got.Unit != "" {
+		t.Errorf("unexpected threshold observation: %+v", got)
 	}
 	// group tags narrow the series; Below picks the lowest.
 	facts.Query = "min(last_5m):avg:cpu{*} by {host} < 5"
-	obs = monitorObservation(context.Background(), q, facts, []string{"host:a"}, now)
-	if obs.Value != "10" || obs.Direction != kuberikrolloutv1alpha1.ObservationDirectionBelow {
-		t.Errorf("group-tag/below observation: %+v", obs)
+	got = monitorObservation(context.Background(), q, facts, []string{"host:a"}, now)
+	if got.Value != "10" || got.Direction != kuberikrolloutv1alpha1.ObservationDirectionBelow {
+		t.Errorf("group-tag/below observation: %+v", got)
 	}
 	// no series or no querier -> State; unsupported type -> State.
 	for _, state := range []observation{
@@ -100,7 +101,7 @@ func TestMonitorObservation(t *testing.T) {
 
 func TestIncidentsObservation(t *testing.T) {
 	now := metav1.Now()
-	none, some := incidentsObservation(0, now), incidentsObservation(3, now)
+	none, some := obs.Count(incidentsObservationName, 0, now), obs.Count(incidentsObservationName, 3, now)
 	if none.Name != "open incidents" || none.Kind != kuberikrolloutv1alpha1.ObservationKindCount || none.Value != "0" || !*none.Healthy {
 		t.Errorf("zero incidents: %+v", none)
 	}

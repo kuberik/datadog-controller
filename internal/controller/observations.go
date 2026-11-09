@@ -206,12 +206,8 @@ func currentMetricValue(ctx context.Context, q metricQuerier, parsed monitorQuer
 // the monitor is a metric/query alert with a parseable limit and a current
 // value, a State otherwise.
 func monitorObservation(ctx context.Context, q metricQuerier, m monitorFacts, groupTags []string, now metav1.Time) observation {
-	state := observation{
-		Name:         m.Name,
-		Kind:         kuberikrolloutv1alpha1.ObservationKindState,
-		Healthy:      m.Healthy,
-		ObservedTime: &now,
-	}
+	state := obs.State(m.Name, false, now)
+	state.Healthy = m.Healthy
 	if !isMetricMonitorType(m.Type) {
 		return state
 	}
@@ -227,41 +223,14 @@ func monitorObservation(ctx context.Context, q metricQuerier, m monitorFacts, gr
 	if m.Critical != nil {
 		limit = *m.Critical
 	}
-	limitStr, ok := obs.FormatDecimal(limit)
-	if !ok {
-		return state
-	}
 	value, unit, ok := currentMetricValue(ctx, q, parsed, direction, groupTags)
 	if !ok {
 		return state
 	}
-	valueStr, ok := obs.FormatDecimal(value)
-	if !ok {
-		return state
+	if o, ok := obs.Threshold(m.Name, value, limit, direction, unit, parsed.Window, m.Healthy, now); ok {
+		return o
 	}
-	return observation{
-		Name:         m.Name,
-		Kind:         kuberikrolloutv1alpha1.ObservationKindThreshold,
-		Value:        valueStr,
-		Limit:        limitStr,
-		Direction:    direction,
-		Unit:         unit,
-		Window:       parsed.Window,
-		Healthy:      m.Healthy,
-		ObservedTime: &now,
-	}
-}
-
-// incidentsObservation is the Count of open incidents; healthy while there are none.
-func incidentsObservation(open int, now metav1.Time) observation {
-	healthy := open == 0
-	return observation{
-		Name:         incidentsObservationName,
-		Kind:         kuberikrolloutv1alpha1.ObservationKindCount,
-		Value:        strconv.Itoa(open),
-		Healthy:      &healthy,
-		ObservedTime: &now,
-	}
+	return state
 }
 
 // healthFromStatuses is false when any status is Alert, true when all are OK,

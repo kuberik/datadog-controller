@@ -236,13 +236,13 @@ func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[stri
 		return false, "", nil, err
 	}
 	if len(incidents) == 0 {
-		return false, "No open Datadog incidents match", []observation{incidentsObservation(0, now)}, nil
+		return false, "No open Datadog incidents match", []observation{obs.Count(incidentsObservationName, 0, now)}, nil
 	}
 	described := make([]string, 0, len(incidents))
 	for _, incident := range incidents {
 		described = append(described, fmt.Sprintf("#%d %s", incident.PublicID, incident.Title))
 	}
-	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{incidentsObservation(len(incidents), now)}, nil
+	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{obs.Count(incidentsObservationName, len(incidents), now)}, nil
 }
 
 // setStatus writes status and message. While Unhealthy, lastErrorTime keeps the
