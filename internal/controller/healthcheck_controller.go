@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -33,6 +35,7 @@ import (
 
 	datadoghqcomv1alpha1 "github.com/DataDog/datadog-operator/api/datadoghq/v1alpha1"
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 // HealthCheckReconciler reconciles a HealthCheck object
@@ -212,13 +215,45 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 		"monitorState", monitor.Status.MonitorState,
 		"healthStatus", healthStatus)
 
-	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime)
+	var healthy *bool
+	switch monitor.Status.MonitorState {
+	case datadoghqcomv1alpha1.DatadogMonitorStateOK:
+		t := true
+		healthy = &t
+	case datadoghqcomv1alpha1.DatadogMonitorStateAlert, datadoghqcomv1alpha1.DatadogMonitorStateWarn:
+		f := false
+		healthy = &f
+	}
+	facts := monitorFacts{Name: monitor.Spec.Name, Type: string(monitor.Spec.Type), Query: monitor.Spec.Query, Healthy: healthy}
+	if facts.Name == "" {
+		facts.Name = monitor.Name
+	}
+	if monitor.Spec.Options.Thresholds != nil && monitor.Spec.Options.Thresholds.Critical != nil {
+		if critical, err := strconv.ParseFloat(*monitor.Spec.Options.Thresholds.Critical, 64); err == nil {
+			facts.Critical = &critical
+		}
+	}
+	// The resource carries no current value; ask Datadog when the controller has
+	// credentials, otherwise the observation degrades to a State.
+	var querier metricQuerier
+	if api, err := r.datadogAPI(); err == nil {
+		querier, _ = api.(metricQuerier)
+	}
+	observations := []observation{monitorObservation(ctx, querier, facts, nil, metav1.Now())}
+
+	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime, observations)
 }
 
 // updateHealthCheckStatus updates the HealthCheck status
-func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time) error {
+func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time, observations ...[]observation) error {
 	// Only update if status has changed
-	if healthCheck.Status.Status == status &&
+	var merged []observation
+	observationsChanged := false
+	writeObservations := len(observations) > 0
+	if writeObservations {
+		merged, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations[0])
+	}
+	if !observationsChanged && healthCheck.Status.Status == status &&
 		((healthCheck.Status.LastErrorTime == nil && lastErrorTime == nil) ||
 			(healthCheck.Status.LastErrorTime != nil && lastErrorTime != nil &&
 				healthCheck.Status.LastErrorTime.Equal(lastErrorTime))) {
@@ -227,6 +262,9 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 
 	healthCheck.Status.Status = status
 	healthCheck.Status.LastErrorTime = lastErrorTime
+	if writeObservations {
+		healthCheck.Status.Observations = merged
+	}
 
 	return r.Status().Update(ctx, healthCheck)
 }
@@ -267,7 +305,7 @@ func (r *HealthCheckReconciler) enqueueHealthChecksForMonitor(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *HealthCheckReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kuberikrolloutv1alpha1.HealthCheck{}).
+		For(&kuberikrolloutv1alpha1.HealthCheck{}, builder.WithPredicates(obs.IgnoreObservationOnlyUpdates())).
 		Watches(
 			&datadoghqcomv1alpha1.DatadogMonitor{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueHealthChecksForMonitor),

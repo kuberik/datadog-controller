@@ -51,6 +51,12 @@ type datadogMonitorState struct {
 	Name         string
 	Tags         []string
 	OverallState string
+	// Type is the Datadog monitor type ("metric alert", "service check", ...).
+	Type string
+	// Query is the monitor query.
+	Query string
+	// Critical is options.thresholds.critical, if set.
+	Critical *float64
 	// Groups maps a group name (e.g. "env:prod,service:api") to its status.
 	Groups map[string]string
 }
@@ -71,6 +77,7 @@ type datadogAPI interface {
 type datadogAPIClient struct {
 	monitors  *datadogV1.MonitorsApi
 	incidents *datadogV2.IncidentsApi
+	metrics   *datadogV1.MetricsApi
 	apiKey    string
 	appKey    string
 	site      string
@@ -102,6 +109,7 @@ func newDatadogAPIClient(apiKey, appKey, site string, servers datadog.ServerConf
 	return &datadogAPIClient{
 		monitors:  datadogV1.NewMonitorsApi(apiClient),
 		incidents: datadogV2.NewIncidentsApi(apiClient),
+		metrics:   datadogV1.NewMetricsApi(apiClient),
 		apiKey:    apiKey,
 		appKey:    appKey,
 		site:      strings.TrimPrefix(strings.TrimPrefix(site, "https://"), "api."),
@@ -143,6 +151,29 @@ func (c *datadogAPIClient) ListMonitorsByTags(ctx context.Context, tags []string
 			return monitors, nil
 		}
 	}
+}
+
+// QueryMetric evaluates a metric query over the trailing window.
+func (c *datadogAPIClient) QueryMetric(ctx context.Context, query string, window time.Duration) ([]metricSeries, error) {
+	to := time.Now()
+	resp, _, err := c.metrics.QueryMetrics(c.requestContext(ctx), to.Add(-window).Unix(), to.Unix(), query)
+	if err != nil {
+		return nil, fmt.Errorf("query metric %q: %w", query, withResponseBody(err))
+	}
+	series := make([]metricSeries, 0, len(resp.Series))
+	for _, s := range resp.Series {
+		out := metricSeries{Tags: s.TagSet}
+		if len(s.Unit) > 0 && s.Unit[0].Name != nil {
+			out.Unit = *s.Unit[0].Name
+		}
+		for _, point := range s.Pointlist {
+			if len(point) == 2 && point[1] != nil {
+				out.Points = append(out.Points, *point[1])
+			}
+		}
+		series = append(series, out)
+	}
+	return series, nil
 }
 
 func (c *datadogAPIClient) SearchOpenIncidents(ctx context.Context, query string) ([]datadogIncident, error) {
@@ -193,7 +224,16 @@ func toMonitorState(monitor datadogV1.Monitor) datadogMonitorState {
 		Name:         monitor.GetName(),
 		Tags:         monitor.Tags,
 		OverallState: string(monitor.GetOverallState()),
+		Type:         string(monitor.GetType()),
+		Query:        monitor.GetQuery(),
 		Groups:       map[string]string{},
+	}
+	if options, ok := monitor.GetOptionsOk(); ok && options != nil {
+		if thresholds, ok := options.GetThresholdsOk(); ok && thresholds != nil {
+			if critical, ok := thresholds.GetCriticalOk(); ok && critical != nil {
+				state.Critical = critical
+			}
+		}
 	}
 	if monitor.State != nil {
 		for name, group := range monitor.State.Groups {

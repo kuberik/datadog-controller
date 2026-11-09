@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	kuberikrolloutv1alpha1 "github.com/kuberik/rollout-controller/api/v1alpha1"
+	obs "github.com/kuberik/rollout-controller/pkg/healthcheck/observation"
 )
 
 const (
@@ -85,10 +86,12 @@ func (r *HealthCheckReconciler) reconcileDatadogClassHealthCheck(
 
 	var unhealthy bool
 	var message string
+	var observations []observation
+	now := metav1.Now()
 	if class == HealthCheckClassDatadog {
-		unhealthy, message, err = evaluateMonitors(ctx, api, healthCheck.Annotations)
+		unhealthy, message, observations, err = evaluateMonitors(ctx, api, healthCheck.Annotations, now)
 	} else {
-		unhealthy, message, err = evaluateIncidents(ctx, api, healthCheck.Annotations)
+		unhealthy, message, observations, err = evaluateIncidents(ctx, api, healthCheck.Annotations, now)
 	}
 	if err != nil {
 		logger.Info("Datadog evaluation failed, marking HealthCheck Pending", "error", err.Error())
@@ -99,7 +102,7 @@ func (r *HealthCheckReconciler) reconcileDatadogClassHealthCheck(
 	if unhealthy {
 		status = kuberikrolloutv1alpha1.HealthStatusUnhealthy
 	}
-	return requeue, true, r.setStatus(ctx, healthCheck, status, message)
+	return requeue, true, r.setStatusWithObservations(ctx, healthCheck, status, message, observations, true)
 }
 
 func (r *HealthCheckReconciler) datadogAPI() (datadogAPI, error) {
@@ -111,29 +114,29 @@ func (r *HealthCheckReconciler) datadogAPI() (datadogAPI, error) {
 
 // evaluateMonitors is unhealthy while any selected monitor, restricted to the
 // groups matching the group tags, is alerting.
-func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[string]string) (bool, string, error) {
+func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, error) {
 	ids, err := parseMonitorIDs(annotations[AnnotationDatadogMonitorIDs])
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	monitorTags := splitList(annotations[AnnotationDatadogMonitorTags])
 	groupTags := splitList(annotations[AnnotationDatadogGroupTags])
 	if len(ids) == 0 && len(monitorTags) == 0 {
-		return false, "", fmt.Errorf("set %s and/or %s", AnnotationDatadogMonitorIDs, AnnotationDatadogMonitorTags)
+		return false, "", nil, fmt.Errorf("set %s and/or %s", AnnotationDatadogMonitorIDs, AnnotationDatadogMonitorTags)
 	}
 
 	monitors := map[int64]datadogMonitorState{}
 	for _, id := range ids {
 		monitor, err := api.GetMonitor(ctx, id)
 		if err != nil {
-			return false, "", err
+			return false, "", nil, err
 		}
 		monitors[monitor.ID] = monitor
 	}
 	if len(monitorTags) > 0 {
 		listed, err := api.ListMonitorsByTags(ctx, monitorTags)
 		if err != nil {
-			return false, "", err
+			return false, "", nil, err
 		}
 		for _, monitor := range listed {
 			if hasAllTags(monitor.Tags, monitorTags) {
@@ -142,9 +145,11 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		}
 	}
 	if len(monitors) == 0 {
-		return false, fmt.Sprintf("No Datadog monitors carry tags %v; nothing to evaluate", monitorTags), nil
+		return false, fmt.Sprintf("No Datadog monitors carry tags %v; nothing to evaluate", monitorTags), nil, nil
 	}
 
+	querier, _ := api.(metricQuerier)
+	observations := make([]observation, 0, len(monitors))
 	var alerting []string
 	evaluated := 0
 	for _, monitor := range monitors {
@@ -154,11 +159,17 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		}
 		evaluated++
 		var alertingGroups []string
+		verdicts := make([]string, 0, len(statuses))
 		for group, status := range statuses {
+			verdicts = append(verdicts, status)
 			if status == monitorStatusAlert {
 				alertingGroups = append(alertingGroups, group)
 			}
 		}
+		observations = append(observations, monitorObservation(ctx, querier, monitorFacts{
+			Name: monitor.Name, Type: monitor.Type, Query: monitor.Query,
+			Critical: monitor.Critical, Healthy: healthFromStatuses(verdicts),
+		}, groupTags, now))
 		if len(alertingGroups) > 0 {
 			sort.Strings(alertingGroups)
 			alerting = append(alerting, fmt.Sprintf("%s [%s]", monitor.Name, strings.Join(alertingGroups, "; ")))
@@ -166,14 +177,15 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 	}
 	if evaluated == 0 {
 		return false, fmt.Sprintf("None of the %d matched Datadog monitors has groups matching %v; nothing to evaluate",
-			len(monitors), groupTags), nil
+			len(monitors), groupTags), nil, nil
 	}
+	observations = obs.Sort(observations)
 	if len(alerting) > 0 {
 		sort.Strings(alerting)
 		return true, fmt.Sprintf("%d of %d Datadog monitors alerting: %s",
-			len(alerting), evaluated, summarize(alerting)), nil
+			len(alerting), evaluated, summarize(alerting)), observations, nil
 	}
-	return false, fmt.Sprintf("%d Datadog monitors OK", evaluated), nil
+	return false, fmt.Sprintf("%d Datadog monitors OK", evaluated), observations, nil
 }
 
 // monitorStatuses returns the status of each monitor group consistent with the
@@ -214,23 +226,23 @@ func groupMatches(group string, groupTags []string) bool {
 }
 
 // evaluateIncidents is unhealthy while any open incident matches the query.
-func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[string]string) (bool, string, error) {
+func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, error) {
 	query := strings.TrimSpace(annotations[AnnotationDatadogIncidentQuery])
 	if query == "" {
-		return false, "", fmt.Errorf("set %s", AnnotationDatadogIncidentQuery)
+		return false, "", nil, fmt.Errorf("set %s", AnnotationDatadogIncidentQuery)
 	}
 	incidents, err := api.SearchOpenIncidents(ctx, query)
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	if len(incidents) == 0 {
-		return false, "No open Datadog incidents match", nil
+		return false, "No open Datadog incidents match", []observation{obs.Count(incidentsObservationName, 0, now)}, nil
 	}
 	described := make([]string, 0, len(incidents))
 	for _, incident := range incidents {
 		described = append(described, fmt.Sprintf("#%d %s", incident.PublicID, incident.Title))
 	}
-	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), nil
+	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{obs.Count(incidentsObservationName, len(incidents), now)}, nil
 }
 
 // setStatus writes status and message. While Unhealthy, lastErrorTime keeps the
@@ -241,6 +253,20 @@ func (r *HealthCheckReconciler) setStatus(
 	healthCheck *kuberikrolloutv1alpha1.HealthCheck,
 	status kuberikrolloutv1alpha1.HealthStatus,
 	message string,
+) error {
+	return r.setStatusWithObservations(ctx, healthCheck, status, message, nil, false)
+}
+
+// setStatusWithObservations is setStatus that also writes status.observations
+// when writeObservations is set; otherwise observations are left as they were
+// (an evaluation error says nothing new about the measured values).
+func (r *HealthCheckReconciler) setStatusWithObservations(
+	ctx context.Context,
+	healthCheck *kuberikrolloutv1alpha1.HealthCheck,
+	status kuberikrolloutv1alpha1.HealthStatus,
+	message string,
+	observations []observation,
+	writeObservations bool,
 ) error {
 	lastErrorTime := healthCheck.Status.LastErrorTime
 	if status == kuberikrolloutv1alpha1.HealthStatusUnhealthy &&
@@ -253,8 +279,15 @@ func (r *HealthCheckReconciler) setStatus(
 	if healthCheck.Status.Message != nil {
 		currentMessage = *healthCheck.Status.Message
 	}
-	if healthCheck.Status.Status == status && currentMessage == message && lastErrorTime == healthCheck.Status.LastErrorTime {
+	observationsChanged := false
+	if writeObservations {
+		observations, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations)
+	}
+	if healthCheck.Status.Status == status && currentMessage == message && lastErrorTime == healthCheck.Status.LastErrorTime && !observationsChanged {
 		return nil
+	}
+	if writeObservations {
+		healthCheck.Status.Observations = observations
 	}
 
 	healthCheck.Status.Status = status
