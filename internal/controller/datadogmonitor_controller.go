@@ -24,6 +24,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -216,4 +219,26 @@ func (r *DatadogMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&datadoghqcomv1alpha1.DatadogMonitor{}).
 		Named("datadogmonitor").
 		Complete(r)
+}
+
+// APIResourceInstalled reports whether the API server serves the given kind,
+// using discovery. A missing group/version is "not installed", not an error.
+func APIResourceInstalled(cfg *rest.Config, gv schema.GroupVersion, kind string) (bool, error) {
+	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return false, err
+	}
+	list, err := dc.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, r := range list.APIResources {
+		if r.Kind == kind {
+			return true, nil
+		}
+	}
+	return false, nil
 }
