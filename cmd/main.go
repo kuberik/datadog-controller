@@ -204,16 +204,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.DatadogMonitorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DatadogMonitor")
+	// The DatadogMonitor controller and watch need the Datadog Operator CRD.
+	// The API-based classes (datadog, datadog-incidents) do not, so a cluster
+	// without the Operator still gets those. Detected once at startup;
+	// restart the controller after installing the Operator.
+	monitorCRD, err := controller.APIResourceInstalled(
+		mgr.GetConfig(), datadoghqcomv1alpha1.GroupVersion, "DatadogMonitor")
+	if err != nil {
+		setupLog.Error(err, "unable to detect the DatadogMonitor CRD")
 		os.Exit(1)
 	}
+	if monitorCRD {
+		if err := (&controller.DatadogMonitorReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "DatadogMonitor")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("DatadogMonitor CRD not installed; running the API health check classes only")
+	}
 	if err := (&controller.HealthCheckReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		SkipMonitorWatch: !monitorCRD,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HealthCheck")
 		os.Exit(1)

@@ -68,7 +68,7 @@ The system consists of two main controllers:
 
 ## Prerequisites
 
-- Kubernetes cluster with Datadog Operator installed
+- Kubernetes cluster. The Datadog Operator is only needed for the DatadogMonitor workflow above; without its CRD the controller starts and runs the API classes only. It checks for the CRD at startup, so restart it after installing the Operator.
 - kuberik Rollout Controller with HealthCheck CRD
 - This controller deployed and running
 

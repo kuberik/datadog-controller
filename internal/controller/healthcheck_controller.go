@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,6 +45,10 @@ type HealthCheckReconciler struct {
 	Scheme *runtime.Scheme
 	// DatadogAPI overrides the client built from the controller environment.
 	DatadogAPI datadogAPI
+	// SkipMonitorWatch disables the DatadogMonitor watch. Set it when the
+	// Datadog Operator CRD is not installed; the API-based classes
+	// (datadog, datadog-incidents) do not need it.
+	SkipMonitorWatch bool
 }
 
 const datadogMonitorKind = "DatadogMonitor"
@@ -122,6 +127,12 @@ func (r *HealthCheckReconciler) isManagedByDatadogController(healthCheck *kuberi
 	return exists && value == "datadog-controller"
 }
 
+// isMonitorMissing reports a Get error that means "no such monitor": the
+// object is gone, or the DatadogMonitor CRD is not installed at all.
+func isMonitorMissing(err error) bool {
+	return errors.IsNotFound(err) || meta.IsNoMatchError(err)
+}
+
 // findOwnerDatadogMonitor finds the DatadogMonitor that owns this HealthCheck
 func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck) (*datadoghqcomv1alpha1.DatadogMonitor, error) {
 	// First try to find by owner reference
@@ -133,7 +144,7 @@ func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, hea
 				Name:      ownerRef.Name,
 			}, datadogMonitor)
 
-			if err != nil && !errors.IsNotFound(err) {
+			if err != nil && !isMonitorMissing(err) {
 				return nil, fmt.Errorf("failed to get owner DatadogMonitor: %w", err)
 			}
 
@@ -152,7 +163,7 @@ func (r *HealthCheckReconciler) findOwnerDatadogMonitor(ctx context.Context, hea
 				Name:      monitorName,
 			}, datadogMonitor)
 
-			if err != nil && !errors.IsNotFound(err) {
+			if err != nil && !isMonitorMissing(err) {
 				return nil, fmt.Errorf("failed to get DatadogMonitor by annotation: %w", err)
 			}
 
@@ -304,12 +315,13 @@ func (r *HealthCheckReconciler) enqueueHealthChecksForMonitor(ctx context.Contex
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *HealthCheckReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&kuberikrolloutv1alpha1.HealthCheck{}, builder.WithPredicates(obs.IgnoreObservationOnlyUpdates())).
-		Watches(
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&kuberikrolloutv1alpha1.HealthCheck{}, builder.WithPredicates(obs.IgnoreObservationOnlyUpdates()))
+	if !r.SkipMonitorWatch {
+		b = b.Watches(
 			&datadoghqcomv1alpha1.DatadogMonitor{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueHealthChecksForMonitor),
-		).
-		Named("healthcheck").
-		Complete(r)
+		)
+	}
+	return b.Named("healthcheck").Complete(r)
 }
