@@ -161,3 +161,7 @@ Check the controller logs to monitor its operation:
 ```bash
 kubectl logs -n <namespace> deployment/datadog-controller
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
