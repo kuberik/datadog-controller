@@ -173,8 +173,8 @@ var _ = Describe("HealthCheck Controller", func() {
 			ctx := context.Background()
 			datadogMonitor.Status.MonitorState = datadoghqcomv1alpha1.DatadogMonitorStateAlert
 			datadogMonitor.Status.TriggeredState = []datadoghqcomv1alpha1.DatadogMonitorTriggeredState{
-				{MonitorGroup: "service:payments", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
-				{MonitorGroup: "service:checkout", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
+				{MonitorGroup: "env:prod,service:payments", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
+				{MonitorGroup: "env:prod,service:checkout", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
 				{MonitorGroup: "service:search", State: datadoghqcomv1alpha1.DatadogMonitorStateWarn},
 			}
 			Expect(k8sClient.Status().Update(ctx, datadogMonitor)).To(Succeed())
@@ -187,7 +187,7 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, got)).To(Succeed())
 			Expect(*got.Status.Message).To(Equal("Monitor test-monitor is Alert"))
 			Expect(got.Status.Observations).To(HaveLen(1))
-			Expect(got.Status.Observations[0].Message).To(Equal("service:checkout, service:payments"))
+			Expect(got.Status.Observations[0].Message).To(Equal("env:prod,service:checkout; env:prod,service:payments"))
 		})
 
 		It("goes Pending with a message, keeping lastErrorTime, when the DatadogMonitor is gone", func() {

@@ -255,24 +255,27 @@ func healthFromStatuses(statuses []string) *bool {
 	return nil
 }
 
-// listMessage joins items with ", " into an observation message. When the list
+// listMessage joins items with sep into an observation message. When the list
 // does not fit in obs.MaxMessageBytes it keeps as many leading items as fit and
 // ends with "and N more".
-func listMessage(items []string) string {
+func listMessage(items []string, sep string) string {
 	if len(items) == 0 {
 		return ""
 	}
-	if joined := strings.Join(items, ", "); len(obs.Message(joined)) == len(joined) {
+	if joined := strings.Join(items, sep); len(obs.Message(joined)) == len(joined) {
 		return joined
 	}
 	for keep := len(items) - 1; keep > 0; keep-- {
-		candidate := fmt.Sprintf("%s and %d more", strings.Join(items[:keep], ", "), len(items)-keep)
+		candidate := fmt.Sprintf("%s and %d more", strings.Join(items[:keep], sep), len(items)-keep)
 		if len(candidate) <= obs.MaxMessageBytes {
 			return obs.Message(candidate)
 		}
 	}
 	return obs.Message(fmt.Sprintf("%d more", len(items)))
 }
+
+// groupSeparator joins monitor groups; group names contain commas themselves.
+const groupSeparator = "; "
 
 // groupsMessage lists the alerting monitor groups ("service:api,env:prod") in a
 // stable order. A monitor without groups reports its state under "*", which
@@ -285,5 +288,5 @@ func groupsMessage(groups []string) string {
 		}
 	}
 	sort.Strings(named)
-	return listMessage(named)
+	return listMessage(named, groupSeparator)
 }

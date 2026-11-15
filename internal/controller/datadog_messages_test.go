@@ -18,21 +18,21 @@ import (
 )
 
 func TestListMessage(t *testing.T) {
-	if got := listMessage(nil); got != "" {
+	if got := listMessage(nil, ", "); got != "" {
 		t.Errorf("empty list: %q", got)
 	}
-	if got := listMessage([]string{"service:checkout", "env:prod"}); got != "service:checkout, env:prod" {
+	if got := listMessage([]string{"service:checkout", "env:prod"}, "; "); got != "service:checkout; env:prod" {
 		t.Errorf("short list: %q", got)
 	}
 	items := make([]string, 0, 100)
 	for i := 0; i < 100; i++ {
 		items = append(items, fmt.Sprintf("service:svc-%03d", i))
 	}
-	got := listMessage(items)
+	got := listMessage(items, "; ")
 	if len(got) > 256 {
 		t.Fatalf("%d bytes, want <= 256", len(got))
 	}
-	if !strings.HasPrefix(got, "service:svc-000, service:svc-001") || !strings.Contains(got, " and ") || !strings.HasSuffix(got, " more") {
+	if !strings.HasPrefix(got, "service:svc-000; service:svc-001") || !strings.Contains(got, " and ") || !strings.HasSuffix(got, " more") {
 		t.Errorf("long list: %q", got)
 	}
 	var kept, more int
@@ -49,7 +49,7 @@ func TestGroupsMessageSkipsUngroupedAndSorts(t *testing.T) {
 	if got := groupsMessage([]string{"*"}); got != "" {
 		t.Errorf("ungrouped monitor: %q", got)
 	}
-	if got := groupsMessage([]string{"service:payments", "service:checkout"}); got != "service:checkout, service:payments" {
+	if got := groupsMessage([]string{"env:prod,service:payments", "env:prod,service:api"}); got != "env:prod,service:api; env:prod,service:payments" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -92,7 +92,7 @@ var _ = Describe("Datadog observation messages", func() {
 	It("names the alerting groups on a monitor's observation and nothing for OK or ungrouped monitors", func() {
 		api := &fakeDatadogAPI{monitors: map[int64]datadogMonitorState{
 			1: {ID: 1, Name: "checkout latency", OverallState: "Alert", Groups: map[string]string{
-				"service:payments": "Alert", "service:checkout": "Alert", "service:search": "OK", "service:legacy": "Warn"}},
+				"env:prod,service:payments": "Alert", "env:prod,service:checkout": "Alert", "env:prod,service:search": "OK", "env:prod,service:legacy": "Warn"}},
 			2: {ID: 2, Name: "healthy", OverallState: "OK", Groups: map[string]string{"service:a": "OK"}},
 			3: {ID: 3, Name: "ungrouped", OverallState: "Alert"},
 		}}
@@ -102,7 +102,7 @@ var _ = Describe("Datadog observation messages", func() {
 			messages[o.Name] = o.Message
 		}
 		Expect(messages).To(Equal(map[string]string{
-			"checkout latency": "service:checkout, service:payments",
+			"checkout latency": "env:prod,service:checkout; env:prod,service:payments",
 			"healthy":          "",
 			"ungrouped":        "",
 		}))

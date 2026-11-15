@@ -245,7 +245,7 @@ func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[stri
 		described = append(described, fmt.Sprintf("#%d %s", incident.PublicID, incident.Title))
 	}
 	count := obs.Count(incidentsObservationName, len(incidents), now)
-	count.Message = listMessage(described)
+	count.Message = listMessage(described, ", ")
 	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{count}, nil
 }
 
