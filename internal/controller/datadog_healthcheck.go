@@ -166,10 +166,12 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 				alertingGroups = append(alertingGroups, group)
 			}
 		}
-		observations = append(observations, monitorObservation(ctx, querier, monitorFacts{
+		o := monitorObservation(ctx, querier, monitorFacts{
 			Name: monitor.Name, Type: monitor.Type, Query: monitor.Query,
 			Critical: monitor.Critical, Healthy: healthFromStatuses(verdicts),
-		}, groupTags, now))
+		}, groupTags, now)
+		o.Message = groupsMessage(alertingGroups)
+		observations = append(observations, o)
 		if len(alertingGroups) > 0 {
 			sort.Strings(alertingGroups)
 			alerting = append(alerting, fmt.Sprintf("%s [%s]", monitor.Name, strings.Join(alertingGroups, "; ")))
@@ -242,7 +244,9 @@ func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[stri
 	for _, incident := range incidents {
 		described = append(described, fmt.Sprintf("#%d %s", incident.PublicID, incident.Title))
 	}
-	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{obs.Count(incidentsObservationName, len(incidents), now)}, nil
+	count := obs.Count(incidentsObservationName, len(incidents), now)
+	count.Message = listMessage(described)
+	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{count}, nil
 }
 
 // setStatus writes status and message. While Unhealthy, lastErrorTime keeps the

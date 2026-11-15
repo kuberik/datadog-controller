@@ -169,6 +169,51 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(updatedHealthCheck.Status.LastErrorTime).NotTo(BeNil())
 		})
 
+		It("writes status.message and names the alerting groups on the observation", func() {
+			ctx := context.Background()
+			datadogMonitor.Status.MonitorState = datadoghqcomv1alpha1.DatadogMonitorStateAlert
+			datadogMonitor.Status.TriggeredState = []datadoghqcomv1alpha1.DatadogMonitorTriggeredState{
+				{MonitorGroup: "service:payments", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
+				{MonitorGroup: "service:checkout", State: datadoghqcomv1alpha1.DatadogMonitorStateAlert},
+				{MonitorGroup: "service:search", State: datadoghqcomv1alpha1.DatadogMonitorStateWarn},
+			}
+			Expect(k8sClient.Status().Update(ctx, datadogMonitor)).To(Succeed())
+
+			r := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			got := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, got)).To(Succeed())
+			Expect(*got.Status.Message).To(Equal("Monitor test-monitor is Alert"))
+			Expect(got.Status.Observations).To(HaveLen(1))
+			Expect(got.Status.Observations[0].Message).To(Equal("service:checkout, service:payments"))
+		})
+
+		It("goes Pending with a message, keeping lastErrorTime, when the DatadogMonitor is gone", func() {
+			ctx := context.Background()
+			datadogMonitor.Status.MonitorState = datadoghqcomv1alpha1.DatadogMonitorStateAlert
+			Expect(k8sClient.Status().Update(ctx, datadogMonitor)).To(Succeed())
+			r := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			failed := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, failed)).To(Succeed())
+			Expect(failed.Status.LastErrorTime).NotTo(BeNil())
+
+			// The owner reference and annotation both point at the deleted monitor.
+			Expect(k8sClient.Delete(ctx, datadogMonitor)).To(Succeed())
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			got := &kuberikrolloutv1alpha1.HealthCheck{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, got)).To(Succeed())
+			Expect(got.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusPending))
+			Expect(*got.Status.Message).To(Equal("DatadogMonitor not found"))
+			Expect(got.Status.LastErrorTime).NotTo(BeNil())
+			Expect(got.Status.LastErrorTime.Time).To(Equal(failed.Status.LastErrorTime.Time))
+		})
+
 		It("should update HealthCheck status to Pending when DatadogMonitor is Warn", func() {
 			ctx := context.Background()
 			By("Setting DatadogMonitor to Warn state")

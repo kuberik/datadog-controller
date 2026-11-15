@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -251,4 +253,37 @@ func healthFromStatuses(statuses []string) *bool {
 		return &t
 	}
 	return nil
+}
+
+// listMessage joins items with ", " into an observation message. When the list
+// does not fit in obs.MaxMessageBytes it keeps as many leading items as fit and
+// ends with "and N more".
+func listMessage(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	if joined := strings.Join(items, ", "); len(obs.Message(joined)) == len(joined) {
+		return joined
+	}
+	for keep := len(items) - 1; keep > 0; keep-- {
+		candidate := fmt.Sprintf("%s and %d more", strings.Join(items[:keep], ", "), len(items)-keep)
+		if len(candidate) <= obs.MaxMessageBytes {
+			return obs.Message(candidate)
+		}
+	}
+	return obs.Message(fmt.Sprintf("%d more", len(items)))
+}
+
+// groupsMessage lists the alerting monitor groups ("service:api,env:prod") in a
+// stable order. A monitor without groups reports its state under "*", which
+// names nothing and is left out.
+func groupsMessage(groups []string) string {
+	named := make([]string, 0, len(groups))
+	for _, g := range groups {
+		if g != "" && g != "*" {
+			named = append(named, g)
+		}
+	}
+	sort.Strings(named)
+	return listMessage(named)
 }

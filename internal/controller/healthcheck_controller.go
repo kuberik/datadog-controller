@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,7 +97,8 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if datadogMonitor == nil {
 		// No owner found, set status to Pending
-		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending, nil); err != nil {
+		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending,
+			healthCheck.Status.LastErrorTime, "DatadogMonitor not found"); err != nil {
 			logger.Error(err, "Failed to update HealthCheck status")
 			return ctrl.Result{}, err
 		}
@@ -250,13 +252,21 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 	if api, err := r.datadogAPI(); err == nil {
 		querier, _ = api.(metricQuerier)
 	}
-	observations := []observation{monitorObservation(ctx, querier, facts, nil, metav1.Now())}
+	o := monitorObservation(ctx, querier, facts, nil, metav1.Now())
+	var alertingGroups []string
+	for _, t := range monitor.Status.TriggeredState {
+		if t.State == datadoghqcomv1alpha1.DatadogMonitorStateAlert {
+			alertingGroups = append(alertingGroups, t.MonitorGroup)
+		}
+	}
+	o.Message = groupsMessage(alertingGroups)
 
-	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime, observations)
+	message := fmt.Sprintf("Monitor %s is %s", facts.Name, monitorStateLabel(monitor.Status.MonitorState))
+	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime, message, []observation{o})
 }
 
 // updateHealthCheckStatus updates the HealthCheck status
-func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time, observations ...[]observation) error {
+func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time, message string, observations ...[]observation) error {
 	// Only update if status has changed
 	var merged []observation
 	observationsChanged := false
@@ -265,6 +275,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 		merged, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations[0])
 	}
 	if !observationsChanged && healthCheck.Status.Status == status &&
+		ptr.Deref(healthCheck.Status.Message, "") == message &&
 		((healthCheck.Status.LastErrorTime == nil && lastErrorTime == nil) ||
 			(healthCheck.Status.LastErrorTime != nil && lastErrorTime != nil &&
 				healthCheck.Status.LastErrorTime.Equal(lastErrorTime))) {
@@ -272,6 +283,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 	}
 
 	healthCheck.Status.Status = status
+	healthCheck.Status.Message = &message
 	healthCheck.Status.LastErrorTime = lastErrorTime
 	if writeObservations {
 		healthCheck.Status.Observations = merged
@@ -324,4 +336,12 @@ func (r *HealthCheckReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)
 	}
 	return b.Named("healthcheck").Complete(r)
+}
+
+// monitorStateLabel is the state as a person would say it; an empty state is "unknown".
+func monitorStateLabel(state datadoghqcomv1alpha1.DatadogMonitorState) string {
+	if state == "" {
+		return "unknown"
+	}
+	return string(state)
 }
