@@ -96,9 +96,10 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if datadogMonitor == nil {
-		// No owner found, set status to Pending
+		// No owner found: the check cannot run, so it is Pending with no
+		// observations (stale ones would still read as failing).
 		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending,
-			healthCheck.Status.LastErrorTime, "DatadogMonitor not found"); err != nil {
+			healthCheck.Status.LastErrorTime, "DatadogMonitor not found", []observation(nil)); err != nil {
 			logger.Error(err, "Failed to update HealthCheck status")
 			return ctrl.Result{}, err
 		}

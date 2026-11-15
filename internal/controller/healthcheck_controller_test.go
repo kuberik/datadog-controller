@@ -212,6 +212,8 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(*got.Status.Message).To(Equal("DatadogMonitor not found"))
 			Expect(got.Status.LastErrorTime).NotTo(BeNil())
 			Expect(got.Status.LastErrorTime.Time).To(Equal(failed.Status.LastErrorTime.Time))
+			Expect(failed.Status.Observations).NotTo(BeEmpty())
+			Expect(got.Status.Observations).To(BeEmpty())
 		})
 
 		It("should update HealthCheck status to Pending when DatadogMonitor is Warn", func() {
