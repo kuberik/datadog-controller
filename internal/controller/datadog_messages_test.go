@@ -150,6 +150,25 @@ var _ = Describe("Datadog observation messages", func() {
 		Expect(hc.Status.Observations[0].Message).To(BeEmpty())
 	})
 
+	It("clears observations and keeps lastErrorTime when a previously Alert check can no longer be evaluated", func() {
+		api := &fakeDatadogAPI{monitors: map[int64]datadogMonitorState{
+			1: {ID: 1, Name: "m", OverallState: "Alert", Groups: map[string]string{"service:a": "Alert"}}}}
+		ann := map[string]string{AnnotationDatadogMonitorIDs: "1"}
+		failed := reconcileWith(api, "recover-err", HealthCheckClassDatadog, ann)
+		Expect(failed.Status.Observations).NotTo(BeEmpty())
+		Expect(failed.Status.LastErrorTime).NotTo(BeNil())
+
+		r := &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), DatadogAPI: erroringAPI{errors.New("HTTP 503")}}
+		_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(failed)})
+		Expect(err).NotTo(HaveOccurred())
+		got := &kuberikrolloutv1alpha1.HealthCheck{}
+		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(failed), got)).To(Succeed())
+		Expect(got.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusPending))
+		Expect(*got.Status.Message).To(ContainSubstring("HTTP 503"))
+		Expect(got.Status.Observations).To(BeEmpty())
+		Expect(got.Status.LastErrorTime.Time).To(Equal(failed.Status.LastErrorTime.Time))
+	})
+
 	Describe("cannot-evaluate paths write Pending with the error and no lastErrorTime", func() {
 		expectPending := func(hc *kuberikrolloutv1alpha1.HealthCheck, want string) {
 			Expect(hc.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusPending))

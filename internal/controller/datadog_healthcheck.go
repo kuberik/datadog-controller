@@ -249,16 +249,18 @@ func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[stri
 	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{count}, nil
 }
 
-// setStatus writes status and message. While Unhealthy, lastErrorTime keeps the
-// time the failure was first seen; the rollout controller clears it on a new
-// deployment or retry, so a failure still present afterwards is stamped anew.
+// setStatus writes a status and message with no observations: it is used when
+// the check cannot be evaluated, and values from an earlier evaluation would
+// still read as a verdict. lastErrorTime is left as it was; only an Unhealthy
+// evaluation stamps it, and the rollout controller clears it on a new
+// deployment or retry.
 func (r *HealthCheckReconciler) setStatus(
 	ctx context.Context,
 	healthCheck *kuberikrolloutv1alpha1.HealthCheck,
 	status kuberikrolloutv1alpha1.HealthStatus,
 	message string,
 ) error {
-	return r.setStatusWithObservations(ctx, healthCheck, status, message, nil, false)
+	return r.setStatusWithObservations(ctx, healthCheck, status, message, nil, true)
 }
 
 // setStatusWithObservations is setStatus that also writes status.observations
