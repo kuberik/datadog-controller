@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -42,6 +43,37 @@ func TestListMessage(t *testing.T) {
 	kept = strings.Count(got, "service:")
 	if kept+more != 100 {
 		t.Errorf("kept %d + more %d != 100", kept, more)
+	}
+}
+
+func TestListMessageNormalisesAndNeverReturnsBareCount(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	cases := []struct {
+		name  string
+		items []string
+		check func(string) bool
+		want  string
+	}{
+		{name: "double space", items: []string{"#1 a  b", "#2 c"}, want: "#1 a b, #2 c"},
+		{name: "newline", items: []string{"#1 a\nb", "#2 c"}, want: "#1 a b, #2 c"},
+		{name: "single item over cap", items: []string{long}, check: func(g string) bool {
+			return len(g) <= 256 && strings.HasPrefix(g, "xxx") && strings.HasSuffix(g, "…")
+		}},
+		{name: "long first then b", items: []string{long, "b"}, check: func(g string) bool {
+			return len(g) <= 256 && strings.HasPrefix(g, "xxx") && strings.HasSuffix(g, "… and 1 more")
+		}},
+		{name: "multibyte first", items: []string{strings.Repeat("é", 200), "b"}, check: func(g string) bool {
+			return len(g) <= 256 && utf8.ValidString(g) && strings.HasSuffix(g, " and 1 more")
+		}},
+	}
+	for _, c := range cases {
+		got := listMessage(c.items, ", ")
+		if c.check != nil && !c.check(got) {
+			t.Errorf("%s: %q", c.name, got)
+		}
+		if c.check == nil && got != c.want {
+			t.Errorf("%s: %q want %q", c.name, got, c.want)
+		}
 	}
 }
 
