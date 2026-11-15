@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -251,4 +253,50 @@ func healthFromStatuses(statuses []string) *bool {
 		return &t
 	}
 	return nil
+}
+
+// listMessage joins items with sep into an observation message. Each item is
+// normalised to one line first. When the list does not fit in
+// obs.MaxMessageBytes it keeps as many leading items as fit and ends with
+// "and N more"; if not even the first item fits with that tail, the joined list
+// is cut by obs.Message instead.
+func listMessage(items []string, sep string) string {
+	clean := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = obs.Message(item); item != "" {
+			clean = append(clean, item)
+		}
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	if joined := strings.Join(clean, sep); len(joined) <= obs.MaxMessageBytes {
+		return joined
+	}
+	for keep := len(clean) - 1; keep > 0; keep-- {
+		candidate := fmt.Sprintf("%s and %d more", strings.Join(clean[:keep], sep), len(clean)-keep)
+		if len(candidate) <= obs.MaxMessageBytes {
+			return candidate
+		}
+	}
+	// Not even the first item fits with a tail: let the shared helper cut the
+	// joined list, so the message still names something.
+	return obs.Message(strings.Join(clean, sep))
+}
+
+// groupSeparator joins monitor groups; group names contain commas themselves.
+const groupSeparator = "; "
+
+// groupsMessage lists the alerting monitor groups ("service:api,env:prod") in a
+// stable order. A monitor without groups reports its state under "*", which
+// names nothing and is left out.
+func groupsMessage(groups []string) string {
+	named := make([]string, 0, len(groups))
+	for _, g := range groups {
+		if g != "" && g != "*" {
+			named = append(named, g)
+		}
+	}
+	sort.Strings(named)
+	return listMessage(named, groupSeparator)
 }
