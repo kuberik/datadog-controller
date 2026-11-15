@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -259,8 +258,8 @@ func healthFromStatuses(statuses []string) *bool {
 // listMessage joins items with sep into an observation message. Each item is
 // normalised to one line first. When the list does not fit in
 // obs.MaxMessageBytes it keeps as many leading items as fit and ends with
-// "and N more"; if even the first item does not fit, that item is cut on a rune
-// boundary so the message still names something.
+// "and N more"; if not even the first item fits with that tail, the joined list
+// is cut by obs.Message instead.
 func listMessage(items []string, sep string) string {
 	clean := make([]string, 0, len(items))
 	for _, item := range items {
@@ -274,23 +273,15 @@ func listMessage(items []string, sep string) string {
 	if joined := strings.Join(clean, sep); len(joined) <= obs.MaxMessageBytes {
 		return joined
 	}
-	for keep := len(clean) - 1; keep > 1; keep-- {
+	for keep := len(clean) - 1; keep > 0; keep-- {
 		candidate := fmt.Sprintf("%s and %d more", strings.Join(clean[:keep], sep), len(clean)-keep)
 		if len(candidate) <= obs.MaxMessageBytes {
 			return candidate
 		}
 	}
-	suffix := fmt.Sprintf(" and %d more", len(clean)-1)
-	first := clean[0]
-	if len(first)+len(suffix) <= obs.MaxMessageBytes {
-		return first + suffix
-	}
-	const ellipsis = "…"
-	cut := obs.MaxMessageBytes - len(suffix) - len(ellipsis)
-	for cut > 0 && !utf8.RuneStart(first[cut]) {
-		cut--
-	}
-	return strings.TrimRight(first[:cut], " ") + ellipsis + suffix
+	// Not even the first item fits with a tail: let the shared helper cut the
+	// joined list, so the message still names something.
+	return obs.Message(strings.Join(clean, sep))
 }
 
 // groupSeparator joins monitor groups; group names contain commas themselves.

@@ -60,10 +60,10 @@ func TestListMessageNormalisesAndNeverReturnsBareCount(t *testing.T) {
 			return len(g) <= 256 && strings.HasPrefix(g, "xxx") && strings.HasSuffix(g, "…")
 		}},
 		{name: "long first then b", items: []string{long, "b"}, check: func(g string) bool {
-			return len(g) <= 256 && strings.HasPrefix(g, "xxx") && strings.HasSuffix(g, "… and 1 more")
+			return len(g) <= 256 && strings.HasPrefix(g, "xxx") && strings.HasSuffix(g, "…") && !strings.Contains(g, "more")
 		}},
 		{name: "multibyte first", items: []string{strings.Repeat("é", 200), "b"}, check: func(g string) bool {
-			return len(g) <= 256 && utf8.ValidString(g) && strings.HasSuffix(g, " and 1 more")
+			return len(g) <= 256 && utf8.ValidString(g) && strings.HasSuffix(g, "…")
 		}},
 	}
 	for _, c := range cases {
