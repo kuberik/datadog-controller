@@ -408,6 +408,70 @@ var _ = Describe("HealthCheck Controller", func() {
 			Expect(updatedHealthCheck.Status.LastErrorTime.Time).To(BeTemporally(">=", firstErrorTime.Time))
 		})
 
+		Context("lastErrorTime while a monitor keeps alerting", func() {
+			var reconciler *HealthCheckReconciler
+			reconcileOnce := func() {
+				_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			fetch := func() *kuberikrolloutv1alpha1.HealthCheck {
+				hc := &kuberikrolloutv1alpha1.HealthCheck{}
+				Expect(k8sClient.Get(context.Background(), typeNamespacedName, hc)).To(Succeed())
+				return hc
+			}
+			setMonitor := func(state datadoghqcomv1alpha1.DatadogMonitorState) {
+				datadogMonitor.Status.MonitorState = state
+				Expect(k8sClient.Status().Update(context.Background(), datadogMonitor)).To(Succeed())
+			}
+			JustBeforeEach(func() {
+				reconciler = &HealthCheckReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			})
+
+			It("keeps the first failure time and writes nothing when reconciled again", func() {
+				setMonitor(datadoghqcomv1alpha1.DatadogMonitorStateAlert)
+				reconcileOnce()
+				first := fetch()
+				Expect(first.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusUnhealthy))
+				Expect(first.Status.LastErrorTime).NotTo(BeNil())
+
+				time.Sleep(1100 * time.Millisecond)
+				reconcileOnce()
+				second := fetch()
+				Expect(second.Status.LastErrorTime.Equal(first.Status.LastErrorTime)).To(BeTrue())
+				Expect(second.ResourceVersion).To(Equal(first.ResourceVersion))
+			})
+
+			It("stamps a new time when the monitor alerts after having been OK", func() {
+				setMonitor(datadoghqcomv1alpha1.DatadogMonitorStateAlert)
+				reconcileOnce()
+				first := fetch().Status.LastErrorTime
+				Expect(first).NotTo(BeNil())
+
+				setMonitor(datadoghqcomv1alpha1.DatadogMonitorStateOK)
+				reconcileOnce()
+				Expect(fetch().Status.LastErrorTime.Equal(first)).To(BeTrue())
+
+				time.Sleep(1100 * time.Millisecond)
+				setMonitor(datadoghqcomv1alpha1.DatadogMonitorStateAlert)
+				reconcileOnce()
+				again := fetch()
+				Expect(again.Status.Status).To(Equal(kuberikrolloutv1alpha1.HealthStatusUnhealthy))
+				Expect(again.Status.LastErrorTime.After(first.Time)).To(BeTrue())
+			})
+
+			It("stamps now when the time was cleared while the monitor is still alerting", func() {
+				setMonitor(datadoghqcomv1alpha1.DatadogMonitorStateAlert)
+				reconcileOnce()
+				hc := fetch()
+				Expect(hc.Status.LastErrorTime).NotTo(BeNil())
+				hc.Status.LastErrorTime = nil
+				Expect(k8sClient.Status().Update(context.Background(), hc)).To(Succeed())
+
+				reconcileOnce()
+				Expect(fetch().Status.LastErrorTime).NotTo(BeNil())
+			})
+		})
+
 		It("should recognise a generated HealthCheck by its class alone", func() {
 			ctx := context.Background()
 			class := HealthCheckClassDatadogMonitorCRD
