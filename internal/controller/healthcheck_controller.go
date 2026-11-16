@@ -194,8 +194,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 		lastErrorTime = healthCheck.Status.LastErrorTime
 	case datadoghqcomv1alpha1.DatadogMonitorStateAlert:
 		healthStatus = kuberikrolloutv1alpha1.HealthStatusUnhealthy
-		now := metav1.Now()
-		lastErrorTime = &now
+		lastErrorTime = nextLastErrorTime(healthCheck, healthStatus)
 	case datadoghqcomv1alpha1.DatadogMonitorStateWarn:
 		// Warning state is considered pending (not explicitly failed)
 		healthStatus = kuberikrolloutv1alpha1.HealthStatusPending

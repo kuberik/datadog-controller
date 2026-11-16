@@ -274,12 +274,7 @@ func (r *HealthCheckReconciler) setStatusWithObservations(
 	observations []observation,
 	writeObservations bool,
 ) error {
-	lastErrorTime := healthCheck.Status.LastErrorTime
-	if status == kuberikrolloutv1alpha1.HealthStatusUnhealthy &&
-		(healthCheck.Status.Status != kuberikrolloutv1alpha1.HealthStatusUnhealthy || lastErrorTime == nil) {
-		now := metav1.Now()
-		lastErrorTime = &now
-	}
+	lastErrorTime := nextLastErrorTime(healthCheck, status)
 
 	currentMessage := ""
 	if healthCheck.Status.Message != nil {
@@ -352,4 +347,18 @@ func summarize(items []string) string {
 		return strings.Join(items, ", ")
 	}
 	return fmt.Sprintf("%s and %d more", strings.Join(items[:maxListedInMessage], ", "), len(items)-maxListedInMessage)
+}
+
+// nextLastErrorTime returns the lastErrorTime to write for a new status. It is
+// stamped when the check turns Unhealthy (or is Unhealthy with no time, for
+// example after it was cleared) and otherwise keeps the existing value, so the
+// time of the first failure survives repeated reconciles and recovery.
+func nextLastErrorTime(healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus) *metav1.Time {
+	lastErrorTime := healthCheck.Status.LastErrorTime
+	if status == kuberikrolloutv1alpha1.HealthStatusUnhealthy &&
+		(healthCheck.Status.Status != kuberikrolloutv1alpha1.HealthStatusUnhealthy || lastErrorTime == nil) {
+		now := metav1.Now()
+		lastErrorTime = &now
+	}
+	return lastErrorTime
 }
