@@ -95,8 +95,8 @@ func TestSeverityOverrideAnnotation(t *testing.T) {
 		}
 	}
 	got := applySeverityOverride(mk(), ann("bogus"))
-	if got[0].Severity != "Critical" || got[1].Severity != "Warning" {
-		t.Errorf("unknown annotation must be ignored: %+v", got)
+	if got[0].Severity != "Critical" || got[1].Severity != "Critical" {
+		t.Errorf("an unknown annotation value counts as Critical: %+v", got)
 	}
 	got = applySeverityOverride(mk(), nil)
 	if got[1].Severity != "Warning" {
