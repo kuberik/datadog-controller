@@ -57,6 +57,8 @@ type datadogMonitorState struct {
 	Query string
 	// Critical is options.thresholds.critical, if set.
 	Critical *float64
+	// Priority is the monitor priority (1 high to 5 low), nil when unset.
+	Priority *int64
 	// Groups maps a group name (e.g. "env:prod,service:api") to its status.
 	Groups map[string]string
 }
@@ -65,6 +67,8 @@ type datadogMonitorState struct {
 type datadogIncident struct {
 	PublicID int64
 	Title    string
+	// Severity is the incident severity ("SEV-1" ... "SEV-5", "UNKNOWN"), empty when unset.
+	Severity string
 }
 
 // datadogAPI is the subset of the Datadog API the HealthCheck classes use.
@@ -200,6 +204,7 @@ func (c *datadogAPIClient) SearchOpenIncidents(ctx context.Context, query string
 			incidents = append(incidents, datadogIncident{
 				PublicID: incidentAttributes.GetPublicId(),
 				Title:    incidentAttributes.Title,
+				Severity: incidentSeverity(incidentAttributes),
 			})
 		}
 		if len(attributes.Incidents) < incidentSearchPageSz {
@@ -228,6 +233,9 @@ func toMonitorState(monitor datadogV1.Monitor) datadogMonitorState {
 		Query:        monitor.GetQuery(),
 		Groups:       map[string]string{},
 	}
+	if priority, ok := monitor.GetPriorityOk(); ok && priority != nil {
+		state.Priority = priority
+	}
 	if options, ok := monitor.GetOptionsOk(); ok && options != nil {
 		if thresholds, ok := options.GetThresholdsOk(); ok && thresholds != nil {
 			if critical, ok := thresholds.GetCriticalOk(); ok && critical != nil {
@@ -248,6 +256,20 @@ func firstNonEmpty(values ...string) string {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			return trimmed
 		}
+	}
+	return ""
+}
+
+// incidentSeverity reads the incident's severity field ("SEV-1"), falling back
+// to the legacy severity attribute.
+func incidentSeverity(attributes *datadogV2.IncidentResponseAttributes) string {
+	if field, ok := attributes.GetFields()["severity"]; ok && field.IncidentFieldAttributesSingleValue != nil {
+		if value := field.IncidentFieldAttributesSingleValue.GetValue(); value != "" {
+			return value
+		}
+	}
+	if attributes.Severity != nil {
+		return string(*attributes.Severity)
 	}
 	return ""
 }

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,11 +88,12 @@ func (r *HealthCheckReconciler) reconcileDatadogClassHealthCheck(
 	var unhealthy bool
 	var message string
 	var observations []observation
+	var failures []kuberikrolloutv1alpha1.HealthCheckFailure
 	now := metav1.Now()
 	if class == HealthCheckClassDatadog {
-		unhealthy, message, observations, err = evaluateMonitors(ctx, api, healthCheck.Annotations, now)
+		unhealthy, message, observations, failures, err = evaluateMonitors(ctx, api, healthCheck.Annotations, now)
 	} else {
-		unhealthy, message, observations, err = evaluateIncidents(ctx, api, healthCheck.Annotations, now)
+		unhealthy, message, observations, failures, err = evaluateIncidents(ctx, api, healthCheck.Annotations, now)
 	}
 	if err != nil {
 		logger.Info("Datadog evaluation failed, marking HealthCheck Pending", "error", err.Error())
@@ -102,7 +104,8 @@ func (r *HealthCheckReconciler) reconcileDatadogClassHealthCheck(
 	if unhealthy {
 		status = kuberikrolloutv1alpha1.HealthStatusUnhealthy
 	}
-	return requeue, true, r.setStatusWithObservations(ctx, healthCheck, status, message, observations, true)
+	failures = applySeverityOverride(failures, healthCheck.Annotations)
+	return requeue, true, r.setStatusWithObservations(ctx, healthCheck, status, message, observations, true, failures...)
 }
 
 func (r *HealthCheckReconciler) datadogAPI() (datadogAPI, error) {
@@ -114,29 +117,29 @@ func (r *HealthCheckReconciler) datadogAPI() (datadogAPI, error) {
 
 // evaluateMonitors is unhealthy while any selected monitor, restricted to the
 // groups matching the group tags, is alerting.
-func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, error) {
+func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, []kuberikrolloutv1alpha1.HealthCheckFailure, error) {
 	ids, err := parseMonitorIDs(annotations[AnnotationDatadogMonitorIDs])
 	if err != nil {
-		return false, "", nil, err
+		return false, "", nil, nil, err
 	}
 	monitorTags := splitList(annotations[AnnotationDatadogMonitorTags])
 	groupTags := splitList(annotations[AnnotationDatadogGroupTags])
 	if len(ids) == 0 && len(monitorTags) == 0 {
-		return false, "", nil, fmt.Errorf("set %s and/or %s", AnnotationDatadogMonitorIDs, AnnotationDatadogMonitorTags)
+		return false, "", nil, nil, fmt.Errorf("set %s and/or %s", AnnotationDatadogMonitorIDs, AnnotationDatadogMonitorTags)
 	}
 
 	monitors := map[int64]datadogMonitorState{}
 	for _, id := range ids {
 		monitor, err := api.GetMonitor(ctx, id)
 		if err != nil {
-			return false, "", nil, err
+			return false, "", nil, nil, err
 		}
 		monitors[monitor.ID] = monitor
 	}
 	if len(monitorTags) > 0 {
 		listed, err := api.ListMonitorsByTags(ctx, monitorTags)
 		if err != nil {
-			return false, "", nil, err
+			return false, "", nil, nil, err
 		}
 		for _, monitor := range listed {
 			if hasAllTags(monitor.Tags, monitorTags) {
@@ -145,12 +148,14 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		}
 	}
 	if len(monitors) == 0 {
-		return false, fmt.Sprintf("No Datadog monitors carry tags %v; nothing to evaluate", monitorTags), nil, nil
+		return false, fmt.Sprintf("No Datadog monitors carry tags %v; nothing to evaluate", monitorTags), nil, nil, nil
 	}
 
 	querier, _ := api.(metricQuerier)
 	observations := make([]observation, 0, len(monitors))
 	var alerting []string
+	var failures []kuberikrolloutv1alpha1.HealthCheckFailure
+	var failureIDs []int64
 	evaluated := 0
 	for _, monitor := range monitors {
 		statuses := monitorStatuses(monitor, groupTags)
@@ -174,20 +179,24 @@ func evaluateMonitors(ctx context.Context, api datadogAPI, annotations map[strin
 		observations = append(observations, o)
 		if len(alertingGroups) > 0 {
 			sort.Strings(alertingGroups)
+			failures = append(failures, alertingMonitorFailure(monitor.Name, monitor.ID, monitor.Priority, alertingGroups, now))
+			failureIDs = append(failureIDs, monitor.ID)
 			alerting = append(alerting, fmt.Sprintf("%s [%s]", monitor.Name, strings.Join(alertingGroups, "; ")))
 		}
 	}
 	if evaluated == 0 {
 		return false, fmt.Sprintf("None of the %d matched Datadog monitors has groups matching %v; nothing to evaluate",
-			len(monitors), groupTags), nil, nil
+			len(monitors), groupTags), nil, nil, nil
 	}
 	observations = obs.Sort(observations)
 	if len(alerting) > 0 {
 		sort.Strings(alerting)
+		sort.Sort(failuresByID{failures, failureIDs})
+		disambiguateSources(failures, failureIDs)
 		return true, fmt.Sprintf("%d of %d Datadog monitors alerting: %s",
-			len(alerting), evaluated, summarize(alerting)), observations, nil
+			len(alerting), evaluated, summarize(alerting)), observations, failures, nil
 	}
-	return false, fmt.Sprintf("%d Datadog monitors OK", evaluated), observations, nil
+	return false, fmt.Sprintf("%d Datadog monitors OK", evaluated), observations, nil, nil
 }
 
 // monitorStatuses returns the status of each monitor group consistent with the
@@ -228,25 +237,27 @@ func groupMatches(group string, groupTags []string) bool {
 }
 
 // evaluateIncidents is unhealthy while any open incident matches the query.
-func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, error) {
+func evaluateIncidents(ctx context.Context, api datadogAPI, annotations map[string]string, now metav1.Time) (bool, string, []observation, []kuberikrolloutv1alpha1.HealthCheckFailure, error) {
 	query := strings.TrimSpace(annotations[AnnotationDatadogIncidentQuery])
 	if query == "" {
-		return false, "", nil, fmt.Errorf("set %s", AnnotationDatadogIncidentQuery)
+		return false, "", nil, nil, fmt.Errorf("set %s", AnnotationDatadogIncidentQuery)
 	}
 	incidents, err := api.SearchOpenIncidents(ctx, query)
 	if err != nil {
-		return false, "", nil, err
+		return false, "", nil, nil, err
 	}
 	if len(incidents) == 0 {
-		return false, "No open Datadog incidents match", []observation{obs.Count(incidentsObservationName, 0, now)}, nil
+		return false, "No open Datadog incidents match", []observation{obs.Count(incidentsObservationName, 0, now)}, nil, nil
 	}
 	described := make([]string, 0, len(incidents))
+	failures := make([]kuberikrolloutv1alpha1.HealthCheckFailure, 0, len(incidents))
 	for _, incident := range incidents {
+		failures = append(failures, incidentFailure(incident, now))
 		described = append(described, fmt.Sprintf("#%d %s", incident.PublicID, incident.Title))
 	}
 	count := obs.Count(incidentsObservationName, len(incidents), now)
 	count.Message = listMessage(described, ", ")
-	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{count}, nil
+	return true, fmt.Sprintf("%d open Datadog incidents: %s", len(incidents), summarize(described)), []observation{count}, failures, nil
 }
 
 // setStatus writes a status and message with no observations: it is used when
@@ -273,6 +284,7 @@ func (r *HealthCheckReconciler) setStatusWithObservations(
 	message string,
 	observations []observation,
 	writeObservations bool,
+	failures ...kuberikrolloutv1alpha1.HealthCheckFailure,
 ) error {
 	lastErrorTime := nextLastErrorTime(healthCheck, status)
 
@@ -284,9 +296,17 @@ func (r *HealthCheckReconciler) setStatusWithObservations(
 	if writeObservations {
 		observations, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations)
 	}
-	if healthCheck.Status.Status == status && currentMessage == message && lastErrorTime == healthCheck.Status.LastErrorTime && !observationsChanged {
+	// Failures are a witness: only merged into, never dropped by a Healthy or
+	// Pending evaluation (the rollout controller resets them on a new deploy).
+	mergedFailures := healthCheck.Status.Failures
+	if len(failures) > 0 {
+		mergedFailures = mergeFailures(healthCheck.Status.Failures, failures)
+	}
+	failuresChanged := !reflect.DeepEqual(mergedFailures, healthCheck.Status.Failures)
+	if healthCheck.Status.Status == status && currentMessage == message && lastErrorTime == healthCheck.Status.LastErrorTime && !observationsChanged && !failuresChanged {
 		return nil
 	}
+	healthCheck.Status.Failures = mergedFailures
 	if writeObservations {
 		healthCheck.Status.Observations = observations
 	}
@@ -361,4 +381,18 @@ func nextLastErrorTime(healthCheck *kuberikrolloutv1alpha1.HealthCheck, status k
 		lastErrorTime = &now
 	}
 	return lastErrorTime
+}
+
+// failuresByID sorts failures by monitor id, so entries come out in a stable
+// order regardless of map iteration.
+type failuresByID struct {
+	failures []kuberikrolloutv1alpha1.HealthCheckFailure
+	ids      []int64
+}
+
+func (f failuresByID) Len() int           { return len(f.ids) }
+func (f failuresByID) Less(i, j int) bool { return f.ids[i] < f.ids[j] }
+func (f failuresByID) Swap(i, j int) {
+	f.ids[i], f.ids[j] = f.ids[j], f.ids[i]
+	f.failures[i], f.failures[j] = f.failures[j], f.failures[i]
 }

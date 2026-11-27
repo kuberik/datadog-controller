@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -99,7 +100,7 @@ func (r *HealthCheckReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// No owner found: the check cannot run, so it is Pending with no
 		// observations (stale ones would still read as failing).
 		if err := r.updateHealthCheckStatus(ctx, healthCheck, kuberikrolloutv1alpha1.HealthStatusPending,
-			healthCheck.Status.LastErrorTime, "DatadogMonitor not found", []observation(nil)); err != nil {
+			healthCheck.Status.LastErrorTime, "DatadogMonitor not found", nil, []observation(nil)); err != nil {
 			logger.Error(err, "Failed to update HealthCheck status")
 			return ctrl.Result{}, err
 		}
@@ -262,11 +263,26 @@ func (r *HealthCheckReconciler) updateHealthCheckStatusFromMonitor(ctx context.C
 	o.Message = groupsMessage(alertingGroups)
 
 	message := fmt.Sprintf("Monitor %s is %s", facts.Name, monitorStateLabel(monitor.Status.MonitorState))
-	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime, message, []observation{o})
+	var failures []kuberikrolloutv1alpha1.HealthCheckFailure
+	if monitor.Status.MonitorState == datadoghqcomv1alpha1.DatadogMonitorStateAlert {
+		var priority *int64
+		if monitor.Spec.Priority != 0 {
+			priority = &monitor.Spec.Priority
+		}
+		failures = applySeverityOverride([]kuberikrolloutv1alpha1.HealthCheckFailure{
+			alertingMonitorFailure(facts.Name, 0, priority, alertingGroups, metav1.Now()),
+		}, healthCheck.Annotations)
+	}
+	return r.updateHealthCheckStatus(ctx, healthCheck, healthStatus, lastErrorTime, message, failures, []observation{o})
 }
 
 // updateHealthCheckStatus updates the HealthCheck status
-func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time, message string, observations ...[]observation) error {
+func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, healthCheck *kuberikrolloutv1alpha1.HealthCheck, status kuberikrolloutv1alpha1.HealthStatus, lastErrorTime *metav1.Time, message string, failures []kuberikrolloutv1alpha1.HealthCheckFailure, observations ...[]observation) error {
+	mergedFailures := healthCheck.Status.Failures
+	if len(failures) > 0 {
+		mergedFailures = mergeFailures(healthCheck.Status.Failures, failures)
+	}
+	failuresChanged := !reflect.DeepEqual(mergedFailures, healthCheck.Status.Failures)
 	// Only update if status has changed
 	var merged []observation
 	observationsChanged := false
@@ -274,7 +290,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 	if writeObservations {
 		merged, observationsChanged = obs.Merge(healthCheck.Status.Observations, observations[0])
 	}
-	if !observationsChanged && healthCheck.Status.Status == status &&
+	if !observationsChanged && !failuresChanged && healthCheck.Status.Status == status &&
 		ptr.Deref(healthCheck.Status.Message, "") == message &&
 		((healthCheck.Status.LastErrorTime == nil && lastErrorTime == nil) ||
 			(healthCheck.Status.LastErrorTime != nil && lastErrorTime != nil &&
@@ -285,6 +301,7 @@ func (r *HealthCheckReconciler) updateHealthCheckStatus(ctx context.Context, hea
 	healthCheck.Status.Status = status
 	healthCheck.Status.Message = &message
 	healthCheck.Status.LastErrorTime = lastErrorTime
+	healthCheck.Status.Failures = mergedFailures
 	if writeObservations {
 		healthCheck.Status.Observations = merged
 	}
