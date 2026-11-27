@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.56.0
 	github.com/DataDog/datadog-operator/api v0.0.0-20260804210503-6dde50a92c2b
-	github.com/kuberik/rollout-controller v0.11.1-0.20261126220845-e932b696b8fe
+	github.com/kuberik/rollout-controller v0.11.1-0.20261127120716-08cdd28e38a8
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.44.0
 	k8s.io/api v0.37.1
