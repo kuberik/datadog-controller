@@ -80,6 +80,9 @@ func applySeverityOverride(failures []kuberikrolloutv1alpha1.HealthCheckFailure,
 	return failures
 }
 
+// clip cuts s to n bytes. The source and message limits are both 256 today; each call names its own limit.
+//
+//nolint:unparam // two named limits that happen to be equal
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
